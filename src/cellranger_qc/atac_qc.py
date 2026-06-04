@@ -184,20 +184,21 @@ class QCMetricsEngine:
         3. Calculate each fragment size as ``end - start``.
         4. Keep fragments within the configured size range.
         5. Convert each fragment size into a nucleosome class.
-        6. Count total, mono-, di-, and multi-nucleosome fragments per barcode.
+        6. Count total, nucleosome-free, mono-, di-, and multi-nucleosome fragments per barcode.
 
         Data example
         ------------
         With ``nuc_len = 147``:
             barcode  start  end  size  class
-            AAAC     100    220  120   mono
-            AAAC     300    600  300   di
+            AAAC     100    220  120   nucleosome_free
+            AAAC     300    470  170   mono
+            AAAC     500    800  300   di
             TTGG     100    620  520   multi
 
         The returned counts are:
-            barcode  n_frags  n_mono_frags  n_di_frags  n_multi_frags
-            AAAC     2        1             1           0
-            TTGG     1        0             0           1
+            barcode  n_frags  n_nucleosome_free_frags  n_mono_frags  n_di_frags  n_multi_frags
+            AAAC     3        1                        1             1           0
+            TTGG     1        0                        0             0           1
 
         Returns
         -------
@@ -205,8 +206,9 @@ class QCMetricsEngine:
             DataFrame with nucleosome counts per barcode. Columns:
                 - 'barcode': Cell barcode (str)
                 - 'n_frags': Total fragment count (int)
-                - 'n_mono_frags': Mono-nucleosome fragments (1x nuc_len) (int)
-                - 'n_di_frags': Di-nucleosome fragments (2x nuc_len) (int)
+                - 'n_nucleosome_free_frags': Nucleosome-free fragments (<1x nuc_len) (int)
+                - 'n_mono_frags': Mono-nucleosome fragments (>=1x and <2x nuc_len) (int)
+                - 'n_di_frags': Di-nucleosome fragments (>=2x and <3x nuc_len) (int)
                 - 'n_multi_frags': Multi-nucleosome fragments (>=3x nuc_len) (int)
         """
         logging.info(f"Fragments file path: {self.atac_fragments_path}")
@@ -244,15 +246,6 @@ class QCMetricsEngine:
                 ]
             )
             .filter((pl.col("frag_size") >= self.nuc_min_frags) & (pl.col("frag_size") <= self.nuc_max_frags))
-            .with_columns(
-                (
-                    (pl.col("frag_size") / self.nuc_len)
-                    .floor()
-                    .cast(pl.Int32)
-                    .add(1)
-                    .alias("nuc_type")
-                )
-            )
             .collect()
         )
 
@@ -260,9 +253,22 @@ class QCMetricsEngine:
             filtered_fragments_df.group_by(["barcode"])
             .agg([
                 pl.len().alias("n_frags"),
-                pl.col("nuc_type").filter(pl.col("nuc_type") == 1).count().alias("n_mono_frags"),
-                pl.col("nuc_type").filter(pl.col("nuc_type") == 2).count().alias("n_di_frags"),
-                pl.col("nuc_type").filter(pl.col("nuc_type") >= 3).count().alias("n_multi_frags"),
+                pl.col("frag_size")
+                .filter(pl.col("frag_size") < self.nuc_len)
+                .count()
+                .alias("n_nucleosome_free_frags"),
+                pl.col("frag_size")
+                .filter((pl.col("frag_size") >= self.nuc_len) & (pl.col("frag_size") < 2 * self.nuc_len))
+                .count()
+                .alias("n_mono_frags"),
+                pl.col("frag_size")
+                .filter((pl.col("frag_size") >= 2 * self.nuc_len) & (pl.col("frag_size") < 3 * self.nuc_len))
+                .count()
+                .alias("n_di_frags"),
+                pl.col("frag_size")
+                .filter(pl.col("frag_size") >= 3 * self.nuc_len)
+                .count()
+                .alias("n_multi_frags"),
             ])
             .to_pandas()
         )
@@ -607,10 +613,11 @@ class QCMetricsEngine:
                 - 'tss_enrichment': TSS enrichment score (float)
                 - 'reads_in_tss': Insertions in TSS window (int)
                 - 'n_frags': Total fragments (int)
+                - 'n_nucleosome_free_frags': Nucleosome-free fragments (int)
                 - 'n_mono_frags': Mono-nucleosome fragments (int)
                 - 'n_di_frags': Di-nucleosome fragments (int)
                 - 'n_multi_frags': Multi-nucleosome fragments (int)
-                - 'nucleosome_ratio': (di + multi) / mono ratio (float)
+                - 'nucleosome_ratio': (mono + di + multi) / nucleosome-free ratio (float)
                 - 'reads_in_promoter': Promoter insertions (int)
                 - 'promoter_ratio': Promoter insertions / (n_frags * 2) (float)
 
@@ -625,7 +632,13 @@ class QCMetricsEngine:
         qc_metrics_df = insertion_counts_df.merge(nucleosome_df, on='barcode', how='left')
         
         # Fill missing nucleosome signal counts with zeros (for barcodes without fragments)
-        nucleosome_cols = ['n_frags', 'n_mono_frags', 'n_di_frags', 'n_multi_frags']
+        nucleosome_cols = [
+            'n_frags',
+            'n_nucleosome_free_frags',
+            'n_mono_frags',
+            'n_di_frags',
+            'n_multi_frags',
+        ]
         qc_metrics_df[nucleosome_cols] = qc_metrics_df[nucleosome_cols].fillna(0).astype(int)
         
         # TSS enrichment calculation
@@ -643,8 +656,12 @@ class QCMetricsEngine:
         
         # Nucleosome ratio calculation
         qc_metrics_df['nucleosome_ratio'] = np.where(
-            qc_metrics_df['n_mono_frags'] > 0,
-            (qc_metrics_df['n_di_frags'] + qc_metrics_df['n_multi_frags']) / qc_metrics_df['n_mono_frags'],
+            qc_metrics_df['n_nucleosome_free_frags'] > 0,
+            (
+                qc_metrics_df['n_mono_frags']
+                + qc_metrics_df['n_di_frags']
+                + qc_metrics_df['n_multi_frags']
+            ) / qc_metrics_df['n_nucleosome_free_frags'],
             np.nan
         )
         

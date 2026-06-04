@@ -3,6 +3,7 @@ import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import h5py
 import matplotlib.pyplot as plt
@@ -20,7 +21,13 @@ logger = logging.getLogger(__name__)
 MULTIOME_ALIGNMENT_METHODS = {"CELL_RANGER_ARCV1", "ARC-RSEQ", "CELL_RANGER_MULTI"}
 
 
-def calculate_doublets(count_matrix, gene_mask_indices, sample_id, doublet_out_path=None, proportion_artificial=0.20):
+def calculate_doublets(
+    count_matrix: sparse.csc_array,
+    gene_mask_indices: np.ndarray,
+    sample_id: np.ndarray,
+    doublet_out_path: Path | str | None = None,
+    proportion_artificial: float = 0.20,
+) -> pd.Series:
     """
     Score each cell for the likelihood that it is a doublet (two cells in one droplet).
 
@@ -28,6 +35,24 @@ def calculate_doublets(count_matrix, gene_mask_indices, sample_id, doublet_out_p
     to make artificial doublets, the combined matrix is log-CPM normalized and embedded
     with PCA, then each real cell is scored by the fraction of its nearest neighbors that
     are artificial doublets within a distance threshold. Higher score => more doublet-like.
+
+    Parameters
+    ----------
+    count_matrix : scipy.sparse.csc_array
+        Gene-by-cell count matrix for real cells.
+    gene_mask_indices : np.ndarray
+        Row indices for genes used to fit and project PCA, typically highly variable genes.
+    sample_id : np.ndarray
+        Per-cell sample identifiers used as the returned Series index.
+    doublet_out_path : pathlib.Path or str, optional
+        Path to write the doublet score density plot. If omitted, no plot is written.
+    proportion_artificial : float, optional
+        Target fraction of artificial doublets after combining real and synthetic cells.
+
+    Returns
+    -------
+    pd.Series
+        Doublet score per cell, indexed by ``sample_id``.
     """
     logger.info("Creating synthetic doublets")
     rng = np.random.RandomState(1)
@@ -91,12 +116,24 @@ def calculate_doublets(count_matrix, gene_mask_indices, sample_id, doublet_out_p
     return pd.Series(doublet_score, index=sample_id)
 
 
-def get_total_reads(outs_dir):
+def get_total_reads(outs_dir: Path) -> pd.DataFrame:
     """
     Get total reads (mapped + unmapped + non-confidently mapped) per cell barcode.
 
     Reads come from per_barcode_metrics.csv for Cell Ranger ARC/multi outputs, or from
     molecule_info_new.h5 for Cell Ranger count outputs.
+
+    Parameters
+    ----------
+    outs_dir : pathlib.Path
+        Cell Ranger ``outs`` directory.
+
+    Returns
+    -------
+    pd.DataFrame
+        DataFrame with columns:
+            - ``bc``: barcode without the ``-1`` suffix
+            - ``total_reads``: total reads assigned to the barcode
     """
     per_barcode_metrics_path = outs_dir / "per_barcode_metrics.csv"
     if per_barcode_metrics_path.exists():
@@ -121,13 +158,36 @@ def get_total_reads(outs_dir):
     return reads[["bc", "total_reads"]]
 
 
-def get_cell_samp_dat(loaded_library, umi_counts, library_row, out_dir):
+def get_cell_samp_dat(
+    loaded_library: "LoadedLibrary",
+    umi_counts: np.ndarray,
+    library_row: dict[str, Any],
+    out_dir: Path | str,
+) -> pd.DataFrame:
     """
     Build the per-cell QC table (samp.dat) for one library.
 
     Adds per-threshold gene counts, doublet scores, total reads, and the exclusion
     flags used downstream: ``exclude`` (below the gene-count threshold) and ``exclude2``
     (also failing the doublet threshold).
+
+    Parameters
+    ----------
+    loaded_library : LoadedLibrary
+        Count matrix and library metadata loaded from Cell Ranger filtered outputs.
+    umi_counts : np.ndarray
+        Per-cell UMI counts from the count matrix.
+    library_row : dict
+        One manifest row containing library metadata such as ``cell_prep_type``,
+        ``ar_dir``, and ``load_name``.
+    out_dir : pathlib.Path or str
+        Output directory where the doublet score density plot is written.
+
+    Returns
+    -------
+    pd.DataFrame
+        Per-cell QC table with sample IDs, barcodes, UMI counts, gene-count
+        thresholds, doublet scores, read counts, exclusion flags, and ``cell_member``.
     """
     samp_dat = pd.DataFrame({
         "sample_id": loaded_library.sample_id,
@@ -166,12 +226,25 @@ def get_cell_samp_dat(loaded_library, umi_counts, library_row, out_dir):
     return samp_dat
 
 
-def write_summary_stats(samp_dat, library_row):
+def write_summary_stats(samp_dat: pd.DataFrame, library_row: dict[str, Any]) -> pd.DataFrame:
     """
     Compute library-level keeper statistics from the per-cell samp.dat table.
 
     Keeper cells pass the gene-count threshold (``exclude == "No"``); keeper_cells also
     pass the doublet threshold (``exclude2 == "No"``). Returns a one-row OCS summary.
+
+    Parameters
+    ----------
+    samp_dat : pd.DataFrame
+        Per-cell QC table returned by ``get_cell_samp_dat``.
+    library_row : dict
+        One manifest row containing library metadata and Cell Ranger output paths.
+
+    Returns
+    -------
+    pd.DataFrame
+        One-row library summary combining manifest fields, Cell Ranger alignment
+        metrics, keeper statistics, TSO fraction, and pass/fail status.
     """
     keepers = samp_dat.loc[samp_dat["exclude"] == "No"]
     keeper_cells = int((keepers["exclude2"] == "No").sum())
@@ -212,8 +285,25 @@ def write_summary_stats(samp_dat, library_row):
     return ocs_summary
 
 
-def extract_intron_exon_matrices(molecule_info_path: Path):
-    """Build intron and exon count matrices from a molecule_info HDF5 file."""
+def extract_intron_exon_matrices(molecule_info_path: Path) -> dict[str, sparse.csc_array]:
+    """
+    Build intron and exon count matrices from a Cell Ranger molecule_info HDF5 file.
+
+    Molecules are split by Cell Ranger ``umi_type`` and counted only for pass-filter
+    barcodes. The returned matrices use feature rows and filtered barcode columns.
+
+    Parameters
+    ----------
+    molecule_info_path : pathlib.Path
+        Path to ``molecule_info.h5``.
+
+    Returns
+    -------
+    dict[str, scipy.sparse.csc_array]
+        Dictionary with:
+            - ``exons``: exon molecule count matrix
+            - ``introns``: intron molecule count matrix
+    """
     with h5py.File(molecule_info_path, "r") as h5_file:
         # Load barcode and molecule-level arrays
         barcodes = np.char.replace(h5_file["barcodes"][...].astype(str), "-1", "")
@@ -241,7 +331,20 @@ def extract_intron_exon_matrices(molecule_info_path: Path):
 
     matrix_shape = (n_features, len(filtered_barcodes))
 
-    def build_umi_matrix(umi_value: int):
+    def build_umi_matrix(umi_value: int) -> sparse.csc_array:
+        """
+        Build a feature-by-cell molecule count matrix for one Cell Ranger UMI type.
+
+        Parameters
+        ----------
+        umi_value : int
+            Cell Ranger UMI type value. ``1`` is exon and ``0`` is intron.
+
+        Returns
+        -------
+        scipy.sparse.csc_array
+            Sparse molecule count matrix for pass-filter barcodes.
+        """
         is_matching_molecule = is_pass_filter_molecule & (
             molecule_umi_type == umi_value
         )
@@ -262,7 +365,23 @@ def extract_intron_exon_matrices(molecule_info_path: Path):
     }
 
 
-def generate_intron_exon(ar_dir, ar_id, out_dir):
+def generate_intron_exon(ar_dir: Path | str, ar_id: str, out_dir: Path | str) -> None:
+    """
+    Generate and write intron and exon matrices for one alignment.
+
+    Parameters
+    ----------
+    ar_dir : pathlib.Path or str
+        Alignment directory containing an ``outs`` subdirectory.
+    ar_id : str
+        Alignment ID used in output filenames.
+    out_dir : pathlib.Path or str
+        Output directory containing the ``matrix`` subdirectory.
+
+    Returns
+    -------
+    None
+    """
     outs_dir = Path(ar_dir) / "outs"
     molecule_info_path = next(outs_dir.glob("*molecule_info.h5"), None)
     if molecule_info_path is None:
@@ -279,7 +398,26 @@ def generate_intron_exon(ar_dir, ar_id, out_dir):
 
 @dataclass
 class LoadedLibrary:
-    """Count matrix and per-library metadata from Cell Ranger filtered output."""
+    """
+    Count matrix and per-library metadata from Cell Ranger filtered output.
+
+    Attributes
+    ----------
+    count_matrix : scipy.sparse.csc_array
+        Gene-by-cell count matrix.
+    gene_df : pd.DataFrame
+        Feature metadata from ``features.tsv.gz``.
+    barcode_list : np.ndarray
+        Cell barcodes without the ``-1`` suffix.
+    sample_id : np.ndarray
+        Unique per-cell sample IDs.
+    gene_names : np.ndarray
+        Gene names with duplicate names disambiguated by gene ID.
+    library_prep : str
+        Library prep identifier.
+    ar_id : str
+        Alignment identifier.
+    """
 
     count_matrix: sparse.csc_array
     gene_df: pd.DataFrame
@@ -290,7 +428,24 @@ class LoadedLibrary:
     ar_id: str
 
 
-def load_data(library_row) -> LoadedLibrary:
+def load_data(library_row: dict[str, Any]) -> LoadedLibrary:
+    """
+    Load filtered Cell Ranger feature-barcode data for one library.
+
+    For multiome libraries, non-Gene Expression rows are removed before downstream
+    GEX QC. Duplicate gene names are disambiguated by appending the gene ID.
+
+    Parameters
+    ----------
+    library_row : dict
+        One manifest row with ``ar_dir``, ``alignment_method``, ``library_prep``,
+        and ``ar_id``.
+
+    Returns
+    -------
+    LoadedLibrary
+        Loaded count matrix and per-library metadata.
+    """
     matrix_dir = Path(library_row["ar_dir"]) / "outs" / "filtered_feature_bc_matrix"
     count_matrix = sparse.csc_array(scipy.io.mmread(matrix_dir / "matrix.mtx.gz"))
     gene_df = pd.read_csv(matrix_dir / "features.tsv.gz", sep="\t", header=None)
@@ -321,7 +476,32 @@ def load_data(library_row) -> LoadedLibrary:
     )
 
 
-def run_rseq_qc(libs, out_dir, num_cores=16):
+def run_rseq_qc(libs: pd.DataFrame, out_dir: Path | str, num_cores: int = 16) -> None:
+    """
+    Run the GEX/multiome post-alignment QC workflow for all libraries in a manifest.
+
+    Workflow
+    --------
+    1. Create the output ``matrix`` directory.
+    2. Load each Cell Ranger filtered feature-barcode matrix.
+    3. Write intron, exon, and count matrices.
+    4. Compute per-cell QC metrics and write ``samp_dat_<ar_id>.csv``.
+    5. Compute library-level summary metrics and write ``ocs_summary.csv``.
+
+    Parameters
+    ----------
+    libs : pd.DataFrame
+        Library manifest loaded from the ``--libs`` CSV.
+    out_dir : pathlib.Path or str
+        Output directory for QC files.
+    num_cores : int, optional
+        Number of CPU cores reported in logs. The current implementation processes
+        libraries sequentially.
+
+    Returns
+    -------
+    None
+    """
     out_dir = Path(out_dir)
     (out_dir / "matrix").mkdir(parents=True, exist_ok=True)
 
@@ -350,7 +530,7 @@ def run_rseq_qc(libs, out_dir, num_cores=16):
         ocs_summary.to_csv(out_dir / "ocs_summary.csv", index=False)
 
 
-def main():
+def main() -> None:
     """
     CLI entry point for the RNA-seq QC pipeline.
 
@@ -362,6 +542,10 @@ def main():
         Directory to write all QC outputs.
     --num-cores : int (optional, default 16)
         Number of CPU cores to make available.
+
+    Returns
+    -------
+    None
     """
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     parser = argparse.ArgumentParser()
