@@ -667,7 +667,7 @@ class QCMetricsEngine:
         total_cells = len(qc_metrics_df)
         high_quality_cells = len(passing_qc_metrics_df)
         
-        logging.info(f"Filtering results:")
+        logging.info("Filtering results:")
         logging.info(f"  Total cells processed: {total_cells:,}")
         logging.info(f"  Cells passing filters: {high_quality_cells:,}")
 
@@ -925,7 +925,7 @@ class QCMetricsEngine:
         tss_regions_df = self.create_tss_regions(transcript_df)
         logging.info(f"    Created {len(tss_regions_df)} TSS regions")
 
-        logging.info(f"  Creating promoter regions (2000bp upstream, 100bp downstream)")
+        logging.info("  Creating promoter regions (2000bp upstream, 100bp downstream)")
         promoter_regions_df = self.create_promoter_regions(genes_df, (2000, 100))
         logging.info(f"    Created {len(promoter_regions_df)} promoter regions")
 

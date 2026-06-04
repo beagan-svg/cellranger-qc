@@ -1,44 +1,40 @@
 # cellranger-qc
 
-Post-run quality-control utilities for Cell Ranger outputs.
+Post-run quality-control utilities for Cell Ranger GEX, multiome, and ATAC outputs.
 
-This package currently provides two command-line workflows:
+`cellranger-qc` packages two production command-line workflows:
 
-- `cellranger-gex-qc`: post-alignment GEX/multiome QC, including per-cell gene counts, doublet scores, intron/exon matrices, count matrices, and OCS summary output.
-- `cellranger-atac-qc`: ATAC QC for Cell Ranger ARC/multiome outputs, including TSS enrichment, promoter ratio, nucleosome metrics, AnnData metadata merge, and CSV export.
+- `cellranger-gex-qc` computes post-alignment GEX/multiome QC tables, doublet scores, intron/exon matrices, count matrices, and library-level summaries.
+- `cellranger-atac-qc` computes ATAC TSS enrichment, promoter ratio, nucleosome metrics, merges the metrics into a GEX AnnData object, and exports a CSV.
 
 ## Requirements
 
 - Python 3.10, 3.11, or 3.12
+- [`uv`](https://docs.astral.sh/uv/) for environment and dependency management
 - Cell Ranger output directories with the expected `outs/` files
 - For ATAC QC, a bgzip-compressed and tabix-indexed fragments file readable by `pysam.TabixFile`
 
-Python 3.13+ is intentionally not enabled yet because several scientific Python and bioinformatics dependencies can lag new Python releases.
+Python 3.13+ is not enabled because several scientific Python and bioinformatics dependencies can lag new Python releases.
 
-## Install
+## Installation
 
-Clone and install in editable mode:
+Install the runtime environment:
 
 ```bash
-git clone git@github.com:beagan-svg/cellranger-qc.git
-cd cellranger-qc
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+uv sync
 ```
 
-For runtime-only installation:
+Install the development environment:
 
 ```bash
-python -m pip install .
+uv sync --extra dev
 ```
 
-Check the installed commands:
+Confirm the CLIs are available:
 
 ```bash
-cellranger-gex-qc --help
-cellranger-atac-qc --help
+uv run cellranger-gex-qc --help
+uv run cellranger-atac-qc --help
 ```
 
 ## GEX / Multiome QC
@@ -46,13 +42,15 @@ cellranger-atac-qc --help
 Run:
 
 ```bash
-cellranger-gex-qc \
+uv run cellranger-gex-qc \
   --libs libs.csv \
   --out-dir qc_output \
   --num-cores 16
 ```
 
-The `libs.csv` file is expected to contain one row per library. The script uses these columns:
+### Library Manifest
+
+`--libs` must point to a CSV file with one row per library.
 
 | Column | Description |
 | --- | --- |
@@ -64,7 +62,9 @@ The `libs.csv` file is expected to contain one row per library. The script uses 
 | `alignment_method` | Used to identify Cell Ranger ARC/multi outputs |
 | `expc_cell_capture` | Expected cell capture count for usable-cell percentage |
 
-Expected Cell Ranger files include:
+### Expected Inputs
+
+For each library, the command expects these Cell Ranger files:
 
 - `outs/filtered_feature_bc_matrix/matrix.mtx.gz`
 - `outs/filtered_feature_bc_matrix/features.tsv.gz`
@@ -74,7 +74,9 @@ Expected Cell Ranger files include:
 - `outs/web_summary.html`
 - Either `outs/per_barcode_metrics.csv` or `outs/*molecule_info_new.h5`
 
-Main outputs:
+### Outputs
+
+The GEX/multiome workflow writes:
 
 - `matrix/count_<ar_id>.mtx`
 - `matrix/intron_<ar_id>.mtx`
@@ -88,7 +90,7 @@ Main outputs:
 Run:
 
 ```bash
-cellranger-atac-qc \
+uv run cellranger-atac-qc \
   --output-path qc_output \
   --load-name LOAD_001 \
   --library-prep-name LIB_PREP_001 \
@@ -98,44 +100,62 @@ cellranger-atac-qc \
   --per-barcode-metrics-path per_barcode_metrics.csv
 ```
 
-The output directory should contain:
+### Expected Inputs
+
+`--output-path` should contain:
 
 - `gex_<alignment_fs_id>.h5ad`
 - `samp.dat_<alignment_fs_id>.csv`
 
 The `samp.dat` file may use either `bc` or `barcodes` for the raw barcode column.
 
-Main outputs:
+Additional required inputs:
+
+- `--annotation-file`: GTF annotation file, optionally gzipped
+- `--atac-fragments-path`: bgzip-compressed, tabix-indexed ATAC fragments file
+- `--per-barcode-metrics-path`: Cell Ranger `per_barcode_metrics.csv`
+
+### Outputs
+
+The ATAC workflow:
 
 - Updates `gex_<alignment_fs_id>.h5ad` by joining ATAC metrics into `obs`
 - Writes `atac_qc_<alignment_fs_id>.csv`
+
+## Operational Notes
+
+- Commands log progress to standard output with timestamps and step summaries.
+- GEX doublet scoring uses a deterministic random seed for synthetic doublet generation.
+- ATAC insertion counting parallelizes chromosome batches internally.
+- Large fragment files should be stored on fast local or high-throughput shared storage.
+- Generated matrices, HDF5 files, CSVs, and PDFs are ignored by git by default.
 
 ## Development
 
 Install development dependencies:
 
 ```bash
-python -m pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
 Run checks:
 
 ```bash
-ruff check .
-pytest
+uv run ruff check .
+uv run pytest
 ```
 
-The GitHub Actions workflow runs linting and tests on Python 3.10, 3.11, and 3.12.
+GitHub Actions runs linting and tests on Python 3.10, 3.11, and 3.12.
 
 ## Versioning
 
 This project uses semantic versioning:
 
 - `MAJOR`: incompatible CLI, input, or output changes
-- `MINOR`: new features that remain backward compatible
-- `PATCH`: bug fixes and small documentation updates
+- `MINOR`: backward-compatible features
+- `PATCH`: backward-compatible fixes and documentation updates
 
-When releasing:
+Release checklist:
 
 1. Update `version` in `pyproject.toml`.
 2. Update `__version__` in `src/cellranger_qc/__init__.py`.
@@ -147,23 +167,4 @@ git add pyproject.toml src/cellranger_qc/__init__.py CHANGELOG.md
 git commit -m "Release v0.1.0"
 git tag v0.1.0
 git push origin main --tags
-```
-
-## Repository Setup
-
-This repository is intended to publish to:
-
-```bash
-git@github.com:beagan-svg/cellranger-qc.git
-```
-
-If starting from a fresh local checkout:
-
-```bash
-git init
-git remote add origin git@github.com:beagan-svg/cellranger-qc.git
-git branch -M main
-git add .
-git commit -m "Initial production package"
-git push -u origin main
 ```

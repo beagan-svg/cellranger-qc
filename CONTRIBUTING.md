@@ -3,10 +3,7 @@
 ## Local setup
 
 ```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install --upgrade pip
-python -m pip install -e ".[dev]"
+uv sync --extra dev
 ```
 
 ## Checks
@@ -14,8 +11,8 @@ python -m pip install -e ".[dev]"
 Run these before opening a pull request:
 
 ```bash
-ruff check .
-pytest
+uv run ruff check .
+uv run pytest
 ```
 
 ## Release checklist
