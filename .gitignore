@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Environments
+.venv/
+venv/
+env/
+
+# Build artifacts
+build/
+dist/
+
+# Local data and generated QC outputs
+*.h5
+*.h5ad
+*.mtx
+*.mtx.gz
+*.tsv.gz
+*.csv
+*.pdf
+matrix/
+outs/
+
+# macOS
+.DS_Store
