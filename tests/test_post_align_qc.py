@@ -30,10 +30,9 @@ class TestCellSampleData:
             count_matrix=count_matrix,
             gene_df=pd.DataFrame(),
             barcode_list=np.array(["AAAC", "TTGG"]),
-            sample_id=np.array(["AAAC-lib-AR123", "TTGG-lib-AR123"]),
+            sample_id=np.array(["AAAC-lib", "TTGG-lib"]),
             gene_names=np.array(["GeneA", "GeneB"]),
             library_prep="lib",
-            ar_id="AR123",
         )
 
         monkeypatch.setattr(
@@ -54,7 +53,7 @@ class TestCellSampleData:
             umi_counts=np.asarray(count_matrix.sum(axis=0)).ravel(),
             library_row={
                 "cell_prep_type": "Cells",
-                "ar_dir": str(tmp_path),
+                "cellranger_run_dir": str(tmp_path),
                 "load_name": "load",
             },
             out_dir=tmp_path,
@@ -117,7 +116,7 @@ class TestSummaryStats:
         )
         library_row = {
             "library_prep": "lib",
-            "ar_dir": str(run_dir),
+            "cellranger_run_dir": str(run_dir),
             "alignment_method": "CELL_RANGER_COUNT",
             "library_prep_method": "GEX",
             "expc_cell_capture": 4,
@@ -163,14 +162,13 @@ class TestLoadData:
 
         loaded_library = load_data(
             {
-                "ar_dir": str(tmp_path / "run"),
+                "cellranger_run_dir": str(tmp_path / "run"),
                 "alignment_method": "CELL_RANGER_MULTI",
                 "library_prep": "lib",
-                "ar_id": "AR123",
             }
         )
 
         assert loaded_library.count_matrix.shape == (2, 2)
         assert loaded_library.barcode_list.tolist() == ["AAAC", "TTGG"]
         assert loaded_library.gene_names.tolist() == ["GeneA", "GeneA gene-b"]
-        assert loaded_library.sample_id.tolist() == ["AAAC-lib-AR123", "TTGG-lib-AR123"]
+        assert loaded_library.sample_id.tolist() == ["AAAC-lib", "TTGG-lib"]

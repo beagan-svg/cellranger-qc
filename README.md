@@ -59,8 +59,7 @@ uv run cellranger-gex-qc \
 
 | Column | Description |
 | --- | --- |
-| `ar_dir` | Parent directory containing the alignment directory |
-| `ar_id` | Alignment ID appended to `ar_dir` to find the Cell Ranger run |
+| `cellranger_run_dir` | Cell Ranger run directory containing the `outs` folder |
 | `library_prep` | Library prep name used in sample IDs and output names |
 | `cell_prep_type` | `Cells` uses a 1,500 gene threshold; other values use 1,000 |
 | `load_name` | Prefix used to create `cell_member` |
@@ -83,10 +82,10 @@ For each manifest row, the workflow expects these files under the resolved Cell 
 
 The GEX/multiome workflow writes:
 
-- `matrix/count_<ar_id>.mtx`
-- `matrix/intron_<ar_id>.mtx`
-- `matrix/exon_<ar_id>.mtx`
-- `samp_dat_<ar_id>.csv`
+- `matrix/count_<library_prep>.mtx`
+- `matrix/intron_<library_prep>.mtx`
+- `matrix/exon_<library_prep>.mtx`
+- `samp_dat_<library_prep>.csv`
 - `<library_prep>.doubscore.pdf`
 - `ocs_summary.csv`
 

@@ -194,7 +194,7 @@ def get_cell_samp_dat(
         Per-cell UMI counts from the count matrix.
     library_row : dict
         One manifest row containing library metadata such as ``cell_prep_type``,
-        ``ar_dir``, and ``load_name``.
+        ``cellranger_run_dir``, and ``load_name``.
     out_dir : pathlib.Path or str
         Output directory where the doublet score density plot is written.
 
@@ -209,7 +209,6 @@ def get_cell_samp_dat(
             "sample_id": loaded_library.sample_id,
             "bc": loaded_library.barcode_list,
             "umi_counts": umi_counts,
-            "ar_id": loaded_library.ar_id,
             "library_prep": loaded_library.library_prep,
         }
     )
@@ -239,7 +238,7 @@ def get_cell_samp_dat(
         (samp_dat["exclude"] == "YES") | (samp_dat["doublet_score"] > 0.3), "YES", "No"
     )
 
-    outs_dir = Path(library_row["ar_dir"]) / "outs"
+    outs_dir = Path(library_row["cellranger_run_dir"]) / "outs"
     samp_dat = samp_dat.merge(get_total_reads(outs_dir), on="bc")
     samp_dat["cell_member"] = str(library_row["load_name"]) + "_" + samp_dat["bc"]
     return samp_dat
@@ -268,7 +267,7 @@ def write_summary_stats(samp_dat: pd.DataFrame, library_row: dict[str, Any]) -> 
     keepers = samp_dat.loc[samp_dat["exclude"] == "No"]
     keeper_cells = int((keepers["exclude2"] == "No").sum())
 
-    outs_dir = Path(library_row["ar_dir"]) / "outs"
+    outs_dir = Path(library_row["cellranger_run_dir"]) / "outs"
     alignment_metrics = pd.read_csv(next(outs_dir.glob("*summary.csv")))
     alignment_metrics.columns = alignment_metrics.columns.str.replace(
         r"[^0-9A-Za-z_]+", "_", regex=True
@@ -395,16 +394,18 @@ def extract_intron_exon_matrices(molecule_info_path: Path) -> dict[str, sparse.c
     }
 
 
-def generate_intron_exon(ar_dir: Path | str, ar_id: str, out_dir: Path | str) -> None:
+def generate_intron_exon(
+    cellranger_run_dir: Path | str, output_prefix: str, out_dir: Path | str
+) -> None:
     """
-    Generate and write intron and exon matrices for one alignment.
+    Generate and write intron and exon matrices for one Cell Ranger run.
 
     Parameters
     ----------
-    ar_dir : pathlib.Path or str
-        Alignment directory containing an ``outs`` subdirectory.
-    ar_id : str
-        Alignment ID used in output filenames.
+    cellranger_run_dir : pathlib.Path or str
+        Cell Ranger run directory containing an ``outs`` subdirectory.
+    output_prefix : str
+        Prefix used in output filenames.
     out_dir : pathlib.Path or str
         Output directory containing the ``matrix`` subdirectory.
 
@@ -412,7 +413,7 @@ def generate_intron_exon(ar_dir: Path | str, ar_id: str, out_dir: Path | str) ->
     -------
     None
     """
-    outs_dir = Path(ar_dir) / "outs"
+    outs_dir = Path(cellranger_run_dir) / "outs"
     molecule_info_path = next(outs_dir.glob("*molecule_info.h5"), None)
     if molecule_info_path is None:
         raise FileNotFoundError(
@@ -423,9 +424,11 @@ def generate_intron_exon(ar_dir: Path | str, ar_id: str, out_dir: Path | str) ->
     intron_exon_matrices = extract_intron_exon_matrices(molecule_info_path)
     logger.info("Saving exon/intron matrices")
     scipy.io.mmwrite(
-        Path(out_dir) / "matrix" / f"intron_{ar_id}.mtx", intron_exon_matrices["introns"]
+        Path(out_dir) / "matrix" / f"intron_{output_prefix}.mtx", intron_exon_matrices["introns"]
     )
-    scipy.io.mmwrite(Path(out_dir) / "matrix" / f"exon_{ar_id}.mtx", intron_exon_matrices["exons"])
+    scipy.io.mmwrite(
+        Path(out_dir) / "matrix" / f"exon_{output_prefix}.mtx", intron_exon_matrices["exons"]
+    )
 
 
 @dataclass
@@ -447,8 +450,6 @@ class LoadedLibrary:
         Gene names with duplicate names disambiguated by gene ID.
     library_prep : str
         Library prep identifier.
-    ar_id : str
-        Alignment identifier.
     """
 
     count_matrix: sparse.csc_array
@@ -457,7 +458,6 @@ class LoadedLibrary:
     sample_id: np.ndarray
     gene_names: np.ndarray
     library_prep: str
-    ar_id: str
 
 
 def load_data(library_row: dict[str, Any]) -> LoadedLibrary:
@@ -470,15 +470,15 @@ def load_data(library_row: dict[str, Any]) -> LoadedLibrary:
     Parameters
     ----------
     library_row : dict
-        One manifest row with ``ar_dir``, ``alignment_method``, ``library_prep``,
-        and ``ar_id``.
+        One manifest row with ``cellranger_run_dir``, ``alignment_method``, and
+        ``library_prep``.
 
     Returns
     -------
     LoadedLibrary
         Loaded count matrix and per-library metadata.
     """
-    matrix_dir = Path(library_row["ar_dir"]) / "outs" / "filtered_feature_bc_matrix"
+    matrix_dir = Path(library_row["cellranger_run_dir"]) / "outs" / "filtered_feature_bc_matrix"
     count_matrix = sparse.csc_array(scipy.io.mmread(matrix_dir / "matrix.mtx.gz"))
     gene_df = pd.read_csv(matrix_dir / "features.tsv.gz", sep="\t", header=None)
     barcode_list = pd.read_csv(matrix_dir / "barcodes.tsv.gz", header=None)[0].str.replace(
@@ -500,10 +500,7 @@ def load_data(library_row: dict[str, Any]) -> LoadedLibrary:
         + gene_df.loc[is_duplicate_gene_name, 0].astype(str)
     )
 
-    # Build a unique sample ID per cell combining barcode, library prep, and AR ID
-    sample_id = (
-        barcode_list + "-" + str(library_row["library_prep"]) + "-" + str(library_row["ar_id"])
-    )
+    sample_id = barcode_list + "-" + str(library_row["library_prep"])
 
     return LoadedLibrary(
         count_matrix=count_matrix.tocsc(),
@@ -512,7 +509,6 @@ def load_data(library_row: dict[str, Any]) -> LoadedLibrary:
         sample_id=sample_id.to_numpy(),
         gene_names=gene_names_series.to_numpy(),
         library_prep=library_row["library_prep"],
-        ar_id=library_row["ar_id"],
     )
 
 
@@ -525,7 +521,7 @@ def run_rseq_qc(libs: pd.DataFrame, out_dir: Path | str, num_cores: int = 16) ->
     1. Create the output ``matrix`` directory.
     2. Load each Cell Ranger filtered feature-barcode matrix.
     3. Write intron, exon, and count matrices.
-    4. Compute per-cell QC metrics and write ``samp_dat_<ar_id>.csv``.
+    4. Compute per-cell QC metrics and write ``samp_dat_<library_prep>.csv``.
     5. Compute library-level summary metrics and write ``ocs_summary.csv``.
 
     Parameters
@@ -551,23 +547,23 @@ def run_rseq_qc(libs: pd.DataFrame, out_dir: Path | str, num_cores: int = 16) ->
 
     for _, library in libs.iterrows():
         library_row = library.to_dict()
-        library_row["ar_dir"] = Path(library_row["ar_dir"]) / library_row["ar_id"]
 
         loaded_library = load_data(library_row)
         logger.info(
             f"{loaded_library.count_matrix.shape[0]} genes x "
             f"{loaded_library.count_matrix.shape[1]} cells"
         )
-        generate_intron_exon(library_row["ar_dir"], library_row["ar_id"], out_dir)
+        output_prefix = str(library_row["library_prep"])
+        generate_intron_exon(library_row["cellranger_run_dir"], output_prefix, out_dir)
         logger.info("Saving count matrix")
         scipy.io.mmwrite(
-            out_dir / "matrix" / f"count_{library_row['ar_id']}.mtx",
+            out_dir / "matrix" / f"count_{output_prefix}.mtx",
             loaded_library.count_matrix,
         )
 
         umi_counts = loaded_library.count_matrix.sum(axis=0)
         samp_dat = get_cell_samp_dat(loaded_library, umi_counts, library_row, out_dir)
-        samp_dat.to_csv(out_dir / f"samp_dat_{library_row['ar_id']}.csv", index=False)
+        samp_dat.to_csv(out_dir / f"samp_dat_{output_prefix}.csv", index=False)
 
         ocs_summary = write_summary_stats(samp_dat, library_row)
         ocs_summary.to_csv(out_dir / "ocs_summary.csv", index=False)
