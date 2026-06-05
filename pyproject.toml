@@ -11,6 +11,7 @@ requires-python = ">=3.10,<3.13"
 authors = [
   { name = "beagan-svg" }
 ]
+license = "MIT"
 dependencies = [
   "anndata>=0.10,<0.12",
   "h5py>=3.10,<4",

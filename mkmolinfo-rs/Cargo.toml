@@ -1,0 +1,25 @@
+[package]
+name = "mkmolinfo"
+version = "1.0.0"
+edition = "2021"
+authors = ["Reconstructed from binary by nigel.delaney@10xgenomics.com (original)"]
+description = "Takes a path to a Cell Ranger Output directory and creates an older (Cell Ranger < 3.0) style molecule_info.h5 file."
+license = "MIT"
+repository = "https://github.com/beagan-svg/cellranger-qc"
+
+# NOTE ON VERSIONS
+# The original binary (rustc ~2019) used: clap 2.32, ndarray 0.12, rand 0.6,
+# rust-htslib (git), and a custom hdf5-rs (git checkout 8dbdd51, HDF5 C lib 1.8.18).
+# This reconstruction targets current crate versions; the public APIs differ
+# from those originals but the behaviour is reproduced.
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+ndarray = "0.16"
+hdf5 = { package = "hdf5-metno", version = "0.10" }  # maintained fork; writes/reads molecule_info.h5
+rust-htslib = "0.47"    # reads possorted_genome_bam.bam
+
+[[bin]]
+name = "mkmolinfo"
+path = "src/main.rs"

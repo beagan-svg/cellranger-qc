@@ -16,6 +16,11 @@ env/
 # Build artifacts
 build/
 dist/
+target/
+mkmolinfo-rs/target/
+
+# Optional original binary used by mkmolinfo-rs parity tests
+/mkmolinfo
 
 # Local data and generated QC outputs
 *.h5

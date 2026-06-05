@@ -1,51 +1,35 @@
 import pandas as pd
 import pytest
 
-from cellranger_qc.atac_qc import QCMetricsEngine, add_metadata
+from cellranger_qc.atac_qc import QCMetricsEngine, save_to_csv, validate_tabix_index
 
 
-def test_add_metadata_accepts_bc_column(tmp_path):
-    qc_metrics = pd.DataFrame(
-        {
-            "barcode": ["AAAC-1", "TTGG-1"],
-            "atac_tss_enrichment": [6.0, 8.0],
-        }
-    )
-    pd.DataFrame(
-        {
-            "bc": ["AAAC", "TTGG"],
-            "cell_member": ["load_AAAC", "load_TTGG"],
-        }
-    ).to_csv(tmp_path / "samp.dat_AR123.csv", index=False)
+def test_save_to_csv_writes_standalone_output_name(tmp_path):
+    qc_metrics = pd.DataFrame({"barcode": ["AAAC-1"], "atac_tss_enrichment": [6.0]})
 
-    result = add_metadata(qc_metrics, str(tmp_path), "AR123")
+    save_to_csv(qc_metrics, str(tmp_path))
 
-    assert result["cell_member"].tolist() == ["load_AAAC", "load_TTGG"]
-    assert "raw_barcode" not in result.columns
+    output_path = tmp_path / "atac_qc.csv"
+    assert output_path.exists()
+    assert pd.read_csv(output_path).to_dict("records") == [
+        {"barcode": "AAAC-1", "atac_tss_enrichment": 6.0}
+    ]
 
 
-def test_add_metadata_accepts_barcodes_column(tmp_path):
-    qc_metrics = pd.DataFrame({"barcode": ["AAAC-1"]})
-    pd.DataFrame(
-        {
-            "barcodes": ["AAAC"],
-            "cell_member": ["load_AAAC"],
-        }
-    ).to_csv(tmp_path / "samp.dat_AR123.csv", index=False)
+def test_validate_tabix_index_accepts_sibling_tbi(tmp_path):
+    fragments_path = tmp_path / "fragments.tsv.gz"
+    fragments_path.touch()
+    (tmp_path / "fragments.tsv.gz.tbi").touch()
 
-    result = add_metadata(qc_metrics, str(tmp_path), "AR123")
-
-    assert result.loc[0, "cell_member"] == "load_AAAC"
+    validate_tabix_index(str(fragments_path))
 
 
-def test_add_metadata_requires_barcode_identifier(tmp_path):
-    qc_metrics = pd.DataFrame({"barcode": ["AAAC-1"]})
-    pd.DataFrame({"cell_member": ["load_AAAC"]}).to_csv(
-        tmp_path / "samp.dat_AR123.csv", index=False
-    )
+def test_validate_tabix_index_requires_sibling_tbi(tmp_path):
+    fragments_path = tmp_path / "fragments.tsv.gz"
+    fragments_path.touch()
 
-    with pytest.raises(ValueError, match="must include either"):
-        add_metadata(qc_metrics, str(tmp_path), "AR123")
+    with pytest.raises(FileNotFoundError, match="tabix-indexed"):
+        validate_tabix_index(str(fragments_path))
 
 
 def test_compute_qc_metrics_uses_nucleosome_free_denominator():
@@ -76,7 +60,7 @@ def test_compute_qc_metrics_uses_nucleosome_free_denominator():
         }
     )
 
-    result = engine.compute_qc_metrics("load", nucleosome_df, insertion_counts_df)
+    result = engine.compute_qc_metrics(nucleosome_df, insertion_counts_df)
 
     assert result.loc[0, "atac_nucleosome_ratio"] == 2
     assert result.loc[0, "atac_n_nucleosome_free_frags"] == 2

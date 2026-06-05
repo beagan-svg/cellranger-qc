@@ -19,6 +19,9 @@ from cellranger_qc import __version__
 logger = logging.getLogger(__name__)
 
 MULTIOME_ALIGNMENT_METHODS = {"CELL_RANGER_ARCV1", "ARC-RSEQ", "CELL_RANGER_MULTI"}
+BARCODE_SUFFIX_PATTERN = r"-1$"
+GENE_COUNT_THRESHOLDS = (0, 1, 4, 8, 16, 32, 64)
+MAX_VARIABLE_GENES = 5000
 
 
 def calculate_doublets(
@@ -96,7 +99,9 @@ def calculate_doublets(
     artificial_distances, _ = artificial_knn.kneighbors(reduced_data[real_cell_count:])
     distance_threshold = artificial_distances.mean() + 1.64 * artificial_distances.std(ddof=1)
 
-    doublet_neighborhood = (neighbor_indices >= real_cell_count) & (neighbor_distances < distance_threshold)
+    doublet_neighborhood = (neighbor_indices >= real_cell_count) & (
+        neighbor_distances < distance_threshold
+    )
     half_k = int(np.ceil(k / 2))
     doublet_score = np.maximum(
         doublet_neighborhood.mean(axis=1),
@@ -139,22 +144,32 @@ def get_total_reads(outs_dir: Path) -> pd.DataFrame:
     if per_barcode_metrics_path.exists():
         barcode_metrics = pd.read_csv(per_barcode_metrics_path)
         barcode_metrics = barcode_metrics.loc[barcode_metrics["is_cell"] == 1]
-        return pd.DataFrame({
-            "bc": barcode_metrics["gex_barcode"].str.replace("-1", ""),
-            "total_reads": barcode_metrics["gex_raw_reads"],
-        })
+        return pd.DataFrame(
+            {
+                "bc": barcode_metrics["gex_barcode"].str.replace(
+                    BARCODE_SUFFIX_PATTERN, "", regex=True
+                ),
+                "total_reads": barcode_metrics["gex_raw_reads"],
+            }
+        )
 
     molecule_info_path = next(outs_dir.glob("*molecule_info_new.h5"))
     with h5py.File(molecule_info_path, "r") as h5_file:
         barcodes = h5_file["barcodes"][...].astype(str)
         barcode_indices = h5_file["barcode_idx"][...]
-        total_reads = h5_file["reads"][...] + h5_file["unmapped_reads"][...] + h5_file["nonconf_mapped_reads"][...]
+        total_reads = (
+            h5_file["reads"][...]
+            + h5_file["unmapped_reads"][...]
+            + h5_file["nonconf_mapped_reads"][...]
+        )
         pass_filter_indices = h5_file["barcode_info/pass_filter"][:, 0]
 
     reads = pd.DataFrame({"barcode_indices": barcode_indices, "total_reads": total_reads})
     reads = reads.loc[reads["barcode_indices"].isin(pass_filter_indices)]
     reads = reads.groupby("barcode_indices", as_index=False)["total_reads"].sum()
-    reads["bc"] = np.char.replace(barcodes[reads["barcode_indices"].to_numpy()], "-1", "")
+    reads["bc"] = pd.Series(barcodes[reads["barcode_indices"].to_numpy()]).str.replace(
+        BARCODE_SUFFIX_PATTERN, "", regex=True
+    )
     return reads[["bc", "total_reads"]]
 
 
@@ -189,24 +204,28 @@ def get_cell_samp_dat(
         Per-cell QC table with sample IDs, barcodes, UMI counts, gene-count
         thresholds, doublet scores, read counts, exclusion flags, and ``cell_member``.
     """
-    samp_dat = pd.DataFrame({
-        "sample_id": loaded_library.sample_id,
-        "bc": loaded_library.barcode_list,
-        "umi_counts": umi_counts,
-        "ar_id": loaded_library.ar_id,
-        "library_prep": loaded_library.library_prep,
-    })
-    # For each barcode count how many genes are expressed above 0,1,4,8,16,32,64
-    for gene_threshold in [0, 1, 4, 8, 16, 32, 64]:
-        samp_dat[f"gene_counts_{gene_threshold}"] = (loaded_library.count_matrix > gene_threshold).sum(axis=0)
+    samp_dat = pd.DataFrame(
+        {
+            "sample_id": loaded_library.sample_id,
+            "bc": loaded_library.barcode_list,
+            "umi_counts": umi_counts,
+            "ar_id": loaded_library.ar_id,
+            "library_prep": loaded_library.library_prep,
+        }
+    )
+    # Count how many genes are expressed above each threshold for every barcode.
+    for gene_threshold in GENE_COUNT_THRESHOLDS:
+        samp_dat[f"gene_counts_{gene_threshold}"] = (
+            loaded_library.count_matrix > gene_threshold
+        ).sum(axis=0)
 
-    count_matrix = loaded_library.count_matrix
+    count_matrix = loaded_library.count_matrix.copy()
     count_matrix.data = np.log2(count_matrix.data + 1)
 
     # Variance per gene across all cells, used to pick the top 5,000 variable genes
     gene_means = count_matrix.mean(axis=1)
     gene_variance = count_matrix.power(2).mean(axis=1) - gene_means**2
-    top_gene_indices = np.argsort(gene_variance)[::-1][:5000]
+    top_gene_indices = np.argsort(gene_variance)[::-1][:MAX_VARIABLE_GENES]
 
     doublet_out_path = Path(out_dir) / f"{loaded_library.library_prep}.doubscore.pdf"
     doublet_score = calculate_doublets(
@@ -251,22 +270,31 @@ def write_summary_stats(samp_dat: pd.DataFrame, library_row: dict[str, Any]) -> 
 
     outs_dir = Path(library_row["ar_dir"]) / "outs"
     alignment_metrics = pd.read_csv(next(outs_dir.glob("*summary.csv")))
-    alignment_metrics.columns = alignment_metrics.columns.str.replace(r"[^0-9A-Za-z_]+", "_", regex=True).str.lower()
+    alignment_metrics.columns = alignment_metrics.columns.str.replace(
+        r"[^0-9A-Za-z_]+", "_", regex=True
+    ).str.lower()
     library_summary = pd.DataFrame([library_row])
-    library_summary = library_summary[["library_prep"] + [column for column in library_summary.columns if column != "library_prep"]]
+    library_summary = library_summary[
+        ["library_prep"]
+        + [column for column in library_summary.columns if column != "library_prep"]
+    ]
 
     ocs_summary = pd.concat(
         [
             library_summary.reset_index(drop=True),
             alignment_metrics.reset_index(drop=True),
-            pd.DataFrame([{
-                "keeper_mean": keepers["total_reads"].mean(),
-                "keeper_median_genes": keepers["gene_counts_0"].median(),
-                "keeper_cells": keeper_cells,
-                "percent_keeper": keeper_cells / len(samp_dat),
-                "percent_doublet": (len(keepers) - keeper_cells) / len(samp_dat),
-                "percent_usable": keeper_cells / library_row["expc_cell_capture"],
-            }]),
+            pd.DataFrame(
+                [
+                    {
+                        "keeper_mean": keepers["total_reads"].mean(),
+                        "keeper_median_genes": keepers["gene_counts_0"].median(),
+                        "keeper_cells": keeper_cells,
+                        "percent_keeper": keeper_cells / len(samp_dat),
+                        "percent_doublet": (len(keepers) - keeper_cells) / len(samp_dat),
+                        "percent_usable": keeper_cells / library_row["expc_cell_capture"],
+                    }
+                ]
+            ),
         ],
         axis=1,
     )
@@ -275,13 +303,17 @@ def write_summary_stats(samp_dat: pd.DataFrame, library_row: dict[str, Any]) -> 
     web_summary_lines = (outs_dir / "web_summary.html").read_text().splitlines()
     if library_row["alignment_method"] in {"ARC-RSEQ", "CELL_RANGER_MULTI"}:
         web_summary = json.loads(web_summary_lines[222].strip()[12:])
-        ocs_summary["tso_frac"] = float(web_summary["gex_sequencing_table"]["rows"][8][1].replace("%", "")) / 100
+        ocs_summary["tso_frac"] = (
+            float(web_summary["gex_sequencing_table"]["rows"][8][1].replace("%", "")) / 100
+        )
     else:
         web_summary = json.loads(web_summary_lines[12].strip()[12:])
         ocs_summary["tso_frac"] = web_summary["summary"]["diagnostics"]["tso_frac"]
 
     ocs_summary["pass_fail"] = "pass"
-    ocs_summary.columns = ocs_summary.columns.str.replace(r"[^0-9A-Za-z_]+", "_", regex=True).str.lower()
+    ocs_summary.columns = ocs_summary.columns.str.replace(
+        r"[^0-9A-Za-z_]+", "_", regex=True
+    ).str.lower()
     return ocs_summary
 
 
@@ -345,9 +377,7 @@ def extract_intron_exon_matrices(molecule_info_path: Path) -> dict[str, sparse.c
         scipy.sparse.csc_array
             Sparse molecule count matrix for pass-filter barcodes.
         """
-        is_matching_molecule = is_pass_filter_molecule & (
-            molecule_umi_type == umi_value
-        )
+        is_matching_molecule = is_pass_filter_molecule & (molecule_umi_type == umi_value)
         return sparse.coo_array(
             (
                 np.ones(is_matching_molecule.sum()),
@@ -392,7 +422,9 @@ def generate_intron_exon(ar_dir: Path | str, ar_id: str, out_dir: Path | str) ->
 
     intron_exon_matrices = extract_intron_exon_matrices(molecule_info_path)
     logger.info("Saving exon/intron matrices")
-    scipy.io.mmwrite(Path(out_dir) / "matrix" / f"intron_{ar_id}.mtx", intron_exon_matrices["introns"])
+    scipy.io.mmwrite(
+        Path(out_dir) / "matrix" / f"intron_{ar_id}.mtx", intron_exon_matrices["introns"]
+    )
     scipy.io.mmwrite(Path(out_dir) / "matrix" / f"exon_{ar_id}.mtx", intron_exon_matrices["exons"])
 
 
@@ -449,7 +481,9 @@ def load_data(library_row: dict[str, Any]) -> LoadedLibrary:
     matrix_dir = Path(library_row["ar_dir"]) / "outs" / "filtered_feature_bc_matrix"
     count_matrix = sparse.csc_array(scipy.io.mmread(matrix_dir / "matrix.mtx.gz"))
     gene_df = pd.read_csv(matrix_dir / "features.tsv.gz", sep="\t", header=None)
-    barcode_list = pd.read_csv(matrix_dir / "barcodes.tsv.gz", header=None)[0].str.replace("-1", "")
+    barcode_list = pd.read_csv(matrix_dir / "barcodes.tsv.gz", header=None)[0].str.replace(
+        BARCODE_SUFFIX_PATTERN, "", regex=True
+    )
 
     # Keep rows where feature type is "Gene Expression"
     if library_row["alignment_method"] in MULTIOME_ALIGNMENT_METHODS:
@@ -460,10 +494,16 @@ def load_data(library_row: dict[str, Any]) -> LoadedLibrary:
     # For duplicate gene names, append the gene ID to the gene name
     gene_names_series = gene_df[1].astype(str)
     is_duplicate_gene_name = gene_names_series.duplicated()
-    gene_names_series.loc[is_duplicate_gene_name] = gene_df.loc[is_duplicate_gene_name, 1].astype(str) + " " + gene_df.loc[is_duplicate_gene_name, 0].astype(str)
+    gene_names_series.loc[is_duplicate_gene_name] = (
+        gene_df.loc[is_duplicate_gene_name, 1].astype(str)
+        + " "
+        + gene_df.loc[is_duplicate_gene_name, 0].astype(str)
+    )
 
     # Build a unique sample ID per cell combining barcode, library prep, and AR ID
-    sample_id = barcode_list + "-" + str(library_row["library_prep"]) + "-" + str(library_row["ar_id"])
+    sample_id = (
+        barcode_list + "-" + str(library_row["library_prep"]) + "-" + str(library_row["ar_id"])
+    )
 
     return LoadedLibrary(
         count_matrix=count_matrix.tocsc(),
@@ -520,7 +560,10 @@ def run_rseq_qc(libs: pd.DataFrame, out_dir: Path | str, num_cores: int = 16) ->
         )
         generate_intron_exon(library_row["ar_dir"], library_row["ar_id"], out_dir)
         logger.info("Saving count matrix")
-        scipy.io.mmwrite(out_dir / "matrix" / f"count_{library_row['ar_id']}.mtx", loaded_library.count_matrix)
+        scipy.io.mmwrite(
+            out_dir / "matrix" / f"count_{library_row['ar_id']}.mtx",
+            loaded_library.count_matrix,
+        )
 
         umi_counts = loaded_library.count_matrix.sum(axis=0)
         samp_dat = get_cell_samp_dat(loaded_library, umi_counts, library_row, out_dir)
@@ -547,7 +590,10 @@ def main() -> None:
     -------
     None
     """
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    )
     parser = argparse.ArgumentParser()
     parser.add_argument("--libs", required=True)
     parser.add_argument("--out-dir", required=True)

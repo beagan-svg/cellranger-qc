@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  python:
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -33,3 +33,29 @@ jobs:
 
       - name: Test
         run: uv run pytest
+
+  rust:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: sudo apt-get update && sudo apt-get install -y libhdf5-dev libclang-dev
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: mkmolinfo-rs
+
+      - name: Format
+        run: cargo fmt --check --manifest-path mkmolinfo-rs/Cargo.toml
+
+      - name: Test
+        run: cargo test --manifest-path mkmolinfo-rs/Cargo.toml

@@ -12,6 +12,11 @@ class FakeMatrix:
     def __gt__(self, threshold):
         return FakeComparison(self.threshold_counts[threshold])
 
+    def copy(self):
+        copied_matrix = FakeMatrix(self.threshold_counts)
+        copied_matrix.data = self.data.copy()
+        return copied_matrix
+
     def mean(self, axis):
         return np.array([[0.0], [1.0], [2.0]])
 
