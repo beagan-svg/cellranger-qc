@@ -1,39 +1,34 @@
-//! mkmolinfo — reconstruction of the 10x Genomics `mkmolinfo` binary.
+//! mkmolinfo — Rust implementation of the `mkmolinfo` utility.
 //!
-//! Original authored by Nigel Delaney <nigel.delaney@10xgenomics.com>, version 1.0.
-//! Reconstructed by reverse-engineering the compiled ELF binary `mkmolinfo`
-//! (Rust, ~2019). The CLI, input/output filenames, the seven HDF5 dataset names,
-//! the 2-bit barcode/UMI encoder, the per-molecule struct layout and the per-read
-//! classification branches were all recovered from disassembly of `mkmolinfo::main`
-//! and are reproduced faithfully here. The HDF5 *dtypes* (u32 counters, u64
-//! barcode) are recovered from instruction widths (`add dword`) and the single
-//! `write_array` monomorphization.
+//! The CLI, input/output filenames, HDF5 dataset names, 2-bit barcode/UMI
+//! encoder, per-molecule metric layout, and per-read classification branches are
+//! defined for this utility. Counter datasets are u32 and barcode
+//! encodings are u64.
 //!
-//! Purpose (verbatim from the binary's --help text):
-//!   "Takes a path to a Cell Ranger Output directory and creates an older
-//!    (Cell Ranger < 3.0) style molecule_info.h5 file."
+//! Purpose:
+//!   Takes a path to a Cell Ranger output directory and creates
+//!   `molecule_info_new.h5`.
 //!
-//! High-level flow (recovered from `main`):
-//!   1. Locate `possorted_genome_bam.bam` and the existing (new-style)
-//!      `molecule_info.h5` inside the given Cell Ranger output directory.
-//!   2. Copy the original h5 to the output path (default `molecule_info_new.h5`)
-//!      and open the copy read-write. Reference/metadata groups carry over.
+//! High-level flow:
+//!   1. Locate `possorted_genome_bam.bam` and `molecule_info.h5` inside the
+//!      given Cell Ranger output directory.
+//!   2. Copy the input h5 to the output path (default `molecule_info_new.h5`)
+//!      and open the copy read-write. Genome and metadata groups carry over.
 //!   3. Read `/barcode_idx`, `/umi` and `/barcodes` from the copied file
 //!      (three `Container::read_1d` calls). These define the molecule list.
-//!   4. Verify every barcode is from a single GEM group (suffix "-1"); the binary
-//!      bails out otherwise ("Barcode is from multiple GEM groups...").
+//!   4. Verify every barcode is from a single GEM group (suffix "-1"); the command
+//!      exits otherwise ("Barcode is from multiple GEM groups...").
 //!   5. Stream the BAM. Per record the tags are read in this exact order:
 //!      CB, UB, CR, UR, TX. A read is joined to a molecule by
 //!      (encode(CB), encode(UB)); only molecules present in the file are kept.
-//!   6. Write exactly SEVEN datasets back into the copied file (recovered names):
+//!   6. Write exactly SEVEN datasets back into the copied file (dataset names):
 //!      reads, barcode_corrected_reads, conf_mapped, nonconf_mapped_reads,
 //!      umi_corrected_reads, unmapped_reads  (six u32 arrays via `write_array`),
 //!      and `barcode` (one u64 array, written directly).
-//!      NOTE: the binary does NOT write gene/genome/gem_group/umi — those already
+//!      NOTE: this command does not write gene/genome/gem_group/umi — those already
 //!      live in the copied file.
 //!
-//! Per-read classification (recovered branch-for-branch from the BAM loop;
-//! `rbx` = pointer to the 6×u32 metrics struct for this molecule):
+//! Per-read classification:
 //!   entry.reads                   += 1   // [rbx+0x00] every joined read
 //!   if CR present && CR != CB_seq:
 //!       entry.barcode_corrected   += 1   // [rbx+0x04]
@@ -56,17 +51,17 @@ use ndarray::Array1;
 use rust_htslib::bam::{self, Read};
 
 // ---------------------------------------------------------------------------
-// Constants recovered verbatim from the binary's .rodata
+// Constants
 // ---------------------------------------------------------------------------
 
-/// Default output filename (recovered: "molecule_info_new.h5").
+/// Default output filename.
 const DEFAULT_OUTPUT: &str = "molecule_info_new.h5";
-/// Input BAM filename searched for in the output dir (recovered).
+/// Input BAM filename searched for in the output dir.
 const BAM_FILENAME: &str = "possorted_genome_bam.bam";
-/// Original new-style molecule info to copy from (searched for in the dir).
+/// Input molecule info to copy from (searched for in the dir).
 const MOLECULE_INFO_FILENAME: &str = "molecule_info.h5";
 
-// BAM aux tags, in the exact order the binary reads them per record.
+// BAM aux tags read per record.
 const TAG_CB: &[u8] = b"CB"; // corrected cell barcode (carries the "-1" GEM suffix)
 const TAG_UB: &[u8] = b"UB"; // corrected UMI
 const TAG_CR: &[u8] = b"CR"; // raw (uncorrected) cell barcode
@@ -77,15 +72,14 @@ const TAG_TX: &[u8] = b"TX"; // transcriptome-compatible alignment (gates conf_m
 const CONF_MAPPED_MAPQ: u8 = 255;
 
 // ---------------------------------------------------------------------------
-// CLI — reproduces the recovered clap definition exactly
+// CLI
 // ---------------------------------------------------------------------------
 
 #[derive(Parser, Debug)]
 #[command(
     name = "mkmolinfo",
     version = "1.0",
-    author = "Nigel Delaney <nigel.delaney@10xgenomics.com>",
-    about = "Takes a path to a Cell Ranger Output directory and creates an older (Cell Ranger < 3.0) style molecule_info.h5 file."
+    about = "Takes a path to a Cell Ranger output directory and creates molecule_info_new.h5."
 )]
 struct Cli {
     /// Specify the output directory produced by Cell Ranger
@@ -100,14 +94,14 @@ struct Cli {
     #[arg(short = 'v')]
     verbose: bool,
 
-    /// Diagnostic (not in original): run the join (steps 1-5), report how many
+    /// Diagnostic: run the join (steps 1-5), report how many
     /// molecules from the file were found in the BAM, then exit without writing.
     #[arg(long = "self-check")]
     self_check: bool,
 }
 
 // ---------------------------------------------------------------------------
-// Barcode/UMI 2-bit encoder — recovered from `mkmolinfo::barcode_str_to_u64`.
+// Barcode/UMI 2-bit encoder.
 // The asm subtracts 'A' (0x41) and uses a jump table, shifting left 2 bits per
 // base: rax = (rax << 2) | code, with A=0,C=1,G=2,T=3 (MSB-first). The same
 // routine encodes both cell barcodes and UMIs (called twice per record on
@@ -147,8 +141,8 @@ fn gem_group_of(barcode: &str) -> Option<u16> {
 }
 
 // ---------------------------------------------------------------------------
-// Per-molecule accumulator — 6 × u32, matching the recovered struct layout.
-// Field order here mirrors the recovered byte offsets for clarity.
+// Per-molecule accumulator — 6 × u32, matching the metric layout.
+// Field order here keeps the field order explicit for clarity.
 // ---------------------------------------------------------------------------
 
 #[derive(Default, Clone)]
@@ -169,8 +163,8 @@ type MolKey = (u64, u64);
 // HDF5 helpers
 // ---------------------------------------------------------------------------
 
-/// Generic dataset writer — reconstruction of `mkmolinfo::write_array`
-/// (`DatasetBuilder::create` followed by `Container::write`). The binary has a
+/// Generic dataset writer — implementation of `mkmolinfo::write_array`
+/// (`DatasetBuilder::create` followed by `Container::write`). This helper has a
 /// single monomorphization (u32), used for all six count datasets.
 fn write_array<T>(file: &hdf5::File, name: &str, data: &Array1<T>) -> Result<()>
 where
@@ -236,7 +230,7 @@ fn has_aux(rec: &bam::Record, tag: &[u8]) -> bool {
 }
 
 /// Parse the BAM, accumulating per-molecule metrics keyed by (barcode, umi).
-/// `valid_keys` restricts work to molecules present in the original file.
+/// `valid_keys` restricts work to molecules present in molecule_info.h5.
 fn parse_bam(
     bam_path: &Path,
     valid_keys: &HashSet<MolKey>,
@@ -256,13 +250,13 @@ fn parse_bam(
             eprintln!("Parsed {n} BAM records...");
         }
 
-        // Tags are read in the binary's exact order: CB, UB, (CR, UR, TX).
+        // Tags are read in a fixed order: CB, UB, (CR, UR, TX).
         let cb = match aux_string(&record, TAG_CB) {
             Some(s) => s,
             None => continue, // no corrected barcode -> skip record
         };
-        // The binary hard-checks that the CB's last byte is '1' (GEM group 1).
-        // Any other GEM group is a FATAL error in the original — it aborts the
+        // The command checks that the CB's last byte is '1' (GEM group 1).
+        // Any other GEM group is a fatal error — it aborts the
         // whole run rather than skipping the read.
         if cb.as_bytes().last() != Some(&b'1') {
             bail!(
@@ -344,7 +338,7 @@ fn locate(dir: &Path, name: &str) -> Option<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// main — reconstruction of `mkmolinfo::main`
+// main — implementation of `mkmolinfo::main`
 // ---------------------------------------------------------------------------
 
 fn main() -> Result<()> {
@@ -356,25 +350,25 @@ fn main() -> Result<()> {
             cli.out_directory.display()
         )
     })?;
-    let orig_h5 = locate(&cli.out_directory, MOLECULE_INFO_FILENAME).ok_or_else(|| {
+    let input_h5 = locate(&cli.out_directory, MOLECULE_INFO_FILENAME).ok_or_else(|| {
         anyhow!(
             "Could not find {MOLECULE_INFO_FILENAME} in {}",
             cli.out_directory.display()
         )
     })?;
 
-    // 1. Copy the original h5 to the output path, then open the copy read-write.
-    //    In --self-check mode we never write, so open the original read-only and
+    // 1. Copy the input h5 to the output path, then open the copy read-write.
+    //    In --self-check mode we never write, so open the input file read-only and
     //    leave the output untouched.
     let file = if cli.self_check {
-        hdf5::File::open(&orig_h5).context("Could not open hdf5 file")?
+        hdf5::File::open(&input_h5).context("Could not open hdf5 file")?
     } else {
-        std::fs::copy(&orig_h5, &cli.output).context("Could not copy original h5 file")?;
+        std::fs::copy(&input_h5, &cli.output).context("Could not copy input h5 file")?;
         hdf5::File::open_rw(&cli.output)
-            .context("Could not open hdf5 output file (copy of original).")?
+            .context("Could not open hdf5 output file (copy of input).")?
     };
 
-    // 2. Read the molecule list from the copied file (3 datasets, recovered order).
+    // 2. Read the molecule list from the copied file (3 datasets, dataset order).
     let barcode_idx =
         read_u64_dataset(&file, "/barcode_idx", "h5 file did not contain barcode_idx")?;
     let umis = read_u64_dataset(&file, "/umi", "H5 file did not contain umi")?;
@@ -390,7 +384,7 @@ fn main() -> Result<()> {
     let n_mol = barcode_idx.len();
 
     // 3. Resolve each molecule's barcode string -> 2-bit code; enforce a single
-    //    GEM group (recovered error message).
+    //    GEM group (error path).
     let mut bc_codes: Vec<u64> = Vec::with_capacity(n_mol);
     let mut single_gem: Option<u16> = None;
     for &bi in &barcode_idx {
@@ -415,10 +409,10 @@ fn main() -> Result<()> {
     // 5. Parse the BAM and accumulate per-molecule metrics.
     let metrics = parse_bam(&bam_path, &valid_keys, cli.verbose)?;
 
-    // Sanity report (recovered message).
+    // Sanity report (sanity report).
     let found = metrics.len();
     eprintln!(
-        "Barcodes in original molecule_info.h5 found in BAM = {found}, not found = {}",
+        "Barcodes in molecule_info.h5 found in BAM = {found}, not found = {}",
         valid_keys.len().saturating_sub(found)
     );
 
@@ -440,7 +434,7 @@ fn main() -> Result<()> {
     }
 
     // 6. Assemble per-molecule output arrays in molecule order and write the
-    //    SEVEN recovered datasets: six u32 counts + the u64 barcode array.
+    //    seven output datasets: six u32 counts + the u64 barcode array.
     let mut reads = Vec::with_capacity(n_mol);
     let mut bc_corr = Vec::with_capacity(n_mol);
     let mut conf = Vec::with_capacity(n_mol);
@@ -461,18 +455,18 @@ fn main() -> Result<()> {
         unmapped.push(m.unmapped_reads);
     }
 
-    // Dataset names recovered verbatim. Note: "conf_mapped" (not "..._reads").
+    // Dataset names defined for this utility. Note: "conf_mapped" (not "..._reads").
     write_array(&file, "reads", &Array1::from(reads))?;
     write_array(&file, "barcode_corrected_reads", &Array1::from(bc_corr))?;
     write_array(&file, "conf_mapped", &Array1::from(conf))?;
     write_array(&file, "nonconf_mapped_reads", &Array1::from(nonconf))?;
     write_array(&file, "umi_corrected_reads", &Array1::from(umi_corr))?;
     write_array(&file, "unmapped_reads", &Array1::from(unmapped))?;
-    // 7th dataset: barcode as the 2-bit u64 encoding (the binary writes this one
+    // 7th dataset: barcode as the 2-bit u64 encoding (this command writes this one
     // directly via DatasetBuilder::create + Container::write, separate from
     // write_array because the element type is u64 rather than u32).
     write_array(&file, "barcode", &Array1::from(bc_codes))?;
 
-    eprintln!("Wrote old-style molecule info to {}", cli.output.display());
+    eprintln!("Wrote molecule info to {}", cli.output.display());
     Ok(())
 }

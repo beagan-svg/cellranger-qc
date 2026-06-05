@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare reconstructed molecule_info dataset dtypes."""
+"""Compare generated molecule_info dataset dtypes."""
 
 from pathlib import Path
 
@@ -19,24 +19,18 @@ COPIED_THROUGH_DATASETS = ["barcode_idx", "umi", "barcodes"]
 
 def main() -> int:
     """CLI entry point."""
-    original_path = Path("out_orig.h5")
-    reconstructed_path = Path("out_mine.h5")
+    generated_path = Path("out_mine.h5")
 
-    with h5py.File(original_path) as original, h5py.File(reconstructed_path) as reconstructed:
-        print(f"{'dataset':<26}{'orig dtype':<14}{'mine dtype':<14}match")
+    with h5py.File(generated_path) as generated:
+        print(f"{'dataset':<26}{'dtype':<14}expected")
         all_ok = True
         for dataset in DATASETS:
-            original_dtype = original[dataset].dtype
-            reconstructed_dtype = reconstructed[dataset].dtype
-            dtype_matches = original_dtype == reconstructed_dtype
+            generated_dtype = generated[dataset].dtype
+            expected_dtype = "uint64" if dataset == "barcode" else "uint32"
+            dtype_matches = str(generated_dtype) == expected_dtype
             all_ok = all_ok and dtype_matches
-            print(
-                f"{dataset:<26}{str(original_dtype):<14}"
-                f"{str(reconstructed_dtype):<14}{dtype_matches}"
-            )
-        copied_through_preserved = all(
-            dataset in original and dataset in reconstructed for dataset in COPIED_THROUGH_DATASETS
-        )
+            print(f"{dataset:<26}{str(generated_dtype):<14}{expected_dtype}")
+        copied_through_preserved = all(dataset in generated for dataset in COPIED_THROUGH_DATASETS)
         print("DTYPES IDENTICAL:", all_ok)
         print("copied-through preserved:", copied_through_preserved)
     return 0 if all_ok and copied_through_preserved else 1

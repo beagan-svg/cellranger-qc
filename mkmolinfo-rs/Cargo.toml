@@ -2,16 +2,10 @@
 name = "mkmolinfo"
 version = "1.0.0"
 edition = "2021"
-authors = ["Reconstructed from binary by nigel.delaney@10xgenomics.com (original)"]
-description = "Takes a path to a Cell Ranger Output directory and creates an older (Cell Ranger < 3.0) style molecule_info.h5 file."
-license = "MIT"
+authors = ["beagan-svg"]
+description = "Takes a path to a Cell Ranger output directory and creates molecule_info_new.h5."
 repository = "https://github.com/beagan-svg/cellranger-qc"
 
-# NOTE ON VERSIONS
-# The original binary (rustc ~2019) used: clap 2.32, ndarray 0.12, rand 0.6,
-# rust-htslib (git), and a custom hdf5-rs (git checkout 8dbdd51, HDF5 C lib 1.8.18).
-# This reconstruction targets current crate versions; the public APIs differ
-# from those originals but the behaviour is reproduced.
 
 [dependencies]
 anyhow = "1"

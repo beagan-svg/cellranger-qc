@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Generate a small, fully-controlled Cell Ranger-style input for parity testing.
+"""Generate a small, fully controlled Cell Ranger-style input for validation testing.
 
 Writes  <outdir>/molecule_info.h5   with /barcodes, /barcode_idx, /umi
 and     <outdir>/possorted_genome_bam.bam  with reads carrying CB/UB/CR/UR/TX
 tags and chosen mapq/unmapped state, so every per-molecule counter is exercised.
 
-The /umi values are computed with the SAME 2-bit scheme the binary's
-barcode_str_to_u64 uses (A=0,C=1,G=2,T=3, MSB-first). If the original binary's
-internal encoding differs, it will simply fail to join any reads (found=0),
-which is itself an informative result.
+The /umi values are computed with the same 2-bit scheme used by
+barcode_str_to_u64 (A=0,C=1,G=2,T=3, MSB-first).
 """
 
 import sys

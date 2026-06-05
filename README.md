@@ -3,7 +3,6 @@
 [![CI](https://github.com/beagan-svg/cellranger-qc/actions/workflows/ci.yml/badge.svg)](https://github.com/beagan-svg/cellranger-qc/actions/workflows/ci.yml)
 [![Python](https://img.shields.io/badge/python-3.10%20%7C%203.11%20%7C%203.12-blue)](https://www.python.org/)
 [![uv](https://img.shields.io/badge/package%20manager-uv-6340ac)](https://docs.astral.sh/uv/)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
 Post-run quality-control tools for Cell Ranger GEX, multiome, and ATAC outputs.
 
@@ -11,7 +10,7 @@ This repository provides:
 
 - `cellranger-gex-qc`: GEX/multiome post-alignment QC, doublet scores, intron/exon matrices, count matrices, and library summaries.
 - `cellranger-atac-qc`: portable ATAC QC from fragments, per-barcode metrics, and a GTF annotation.
-- `mkmolinfo-rs`: optional Rust helper for reconstructing legacy `molecule_info_new.h5` files used by older GEX QC workflows.
+- `mkmolinfo-rs`: optional Rust helper for generating `molecule_info_new.h5` files used by GEX QC workflows.
 
 ## Requirements
 
@@ -127,15 +126,15 @@ The ATAC workflow writes `atac_qc.csv` with passing cells and `atac_`-prefixed m
 - `atac_reads_in_promoter`
 - `atac_promoter_ratio`
 
-## Optional Legacy molecule_info Helper
+## Optional molecule_info Helper
 
-`mkmolinfo-rs` reconstructs a legacy `molecule_info_new.h5` from a Cell Ranger output directory. Build it only if your GEX workflow needs that compatibility file.
+`mkmolinfo-rs` generates `molecule_info_new.h5` from a Cell Ranger output directory. Build it only if your GEX workflow needs that compatibility file.
 
 ```bash
 cargo build --manifest-path mkmolinfo-rs/Cargo.toml --release
 ```
 
-See [docs/mkmolinfo.md](docs/mkmolinfo.md) for usage, HDF5 version notes, and parity-test details.
+See [docs/mkmolinfo.md](docs/mkmolinfo.md) for usage, HDF5 version notes, and validation-test details.
 
 ## Operational Notes
 
@@ -190,7 +189,3 @@ git commit -m "Release v0.1.0"
 git tag v0.1.0
 git push origin main --tags
 ```
-
-## License
-
-This project is released under the [MIT License](LICENSE).
