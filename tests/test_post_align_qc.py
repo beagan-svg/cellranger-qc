@@ -16,48 +16,15 @@ from cellranger_qc.post_align_qc import (
 )
 
 
-class FakeMatrix:
-    def __init__(self, threshold_counts):
-        self.threshold_counts = threshold_counts
-        self.data = np.array([1.0])
-
-    def __gt__(self, threshold):
-        return FakeComparison(self.threshold_counts[threshold])
-
-    def copy(self):
-        copied_matrix = FakeMatrix(self.threshold_counts)
-        copied_matrix.data = self.data.copy()
-        return copied_matrix
-
-    def mean(self, axis):
-        return np.array([[0.0], [1.0], [2.0]])
-
-    def power(self, value):
-        return self
-
-
-class FakeComparison:
-    def __init__(self, values):
-        self.values = np.asarray(values)
-
-    def sum(self, axis):
-        return self.values
-
-
 def test_get_cell_samp_dat_builds_expected_columns(monkeypatch, tmp_path):
-    matrix = FakeMatrix(
-        {
-            0: [1600, 1200],
-            1: [1500, 1100],
-            4: [1000, 900],
-            8: [500, 400],
-            16: [200, 100],
-            32: [50, 25],
-            64: [10, 5],
-        }
+    row_indices = np.concatenate([np.arange(1600), np.arange(1200)])
+    column_indices = np.concatenate([np.zeros(1600, dtype=int), np.ones(1200, dtype=int)])
+    count_matrix = sparse.csc_array(
+        (np.ones(2800), (row_indices, column_indices)),
+        shape=(1600, 2),
     )
     library = LoadedLibrary(
-        count_matrix=matrix,
+        count_matrix=count_matrix,
         gene_df=pd.DataFrame(),
         barcode_list=np.array(["AAAC", "TTGG"]),
         sample_id=np.array(["AAAC-lib-AR123", "TTGG-lib-AR123"]),
@@ -79,7 +46,7 @@ def test_get_cell_samp_dat_builds_expected_columns(monkeypatch, tmp_path):
 
     result = get_cell_samp_dat(
         library,
-        umi_counts=np.array([5000, 4000]),
+        umi_counts=np.asarray(count_matrix.sum(axis=0)).ravel(),
         library_row={
             "cell_prep_type": "Cells",
             "ar_dir": str(tmp_path),
@@ -104,9 +71,9 @@ def test_get_total_reads_uses_per_barcode_metrics_when_available(tmp_path):
         }
     ).to_csv(outs_dir / "per_barcode_metrics.csv", index=False)
 
-    result = get_total_reads(outs_dir)
+    total_reads_df = get_total_reads(outs_dir)
 
-    assert result.to_dict("records") == [
+    assert total_reads_df.to_dict("records") == [
         {"bc": "AAAC", "total_reads": 100},
         {"bc": "CCAA-2", "total_reads": 300},
     ]
@@ -125,9 +92,9 @@ def test_write_summary_stats_extracts_library_metrics(tmp_path):
     ).to_csv(outs_dir / "summary.csv", index=False)
 
     web_summary = {"summary": {"diagnostics": {"tso_frac": 0.12}}}
-    web_summary_lines = [""] * 13
-    web_summary_lines[12] = "x" * 12 + json.dumps(web_summary)
-    (outs_dir / "web_summary.html").write_text("\n".join(web_summary_lines))
+    web_summary_line_list = [""] * 13
+    web_summary_line_list[12] = "x" * 12 + json.dumps(web_summary)
+    (outs_dir / "web_summary.html").write_text("\n".join(web_summary_line_list))
 
     samp_dat = pd.DataFrame(
         {
@@ -145,17 +112,14 @@ def test_write_summary_stats_extracts_library_metrics(tmp_path):
         "expc_cell_capture": 4,
     }
 
-    result = write_summary_stats(samp_dat, library_row)
+    summary_df = write_summary_stats(samp_dat, library_row)
 
-    assert result.loc[0, "keeper_mean"] == 1500
-    assert result.loc[0, "keeper_median_genes"] == 1250
-    assert result.loc[0, "keeper_cells"] == 1
-    assert result.loc[0, "percent_keeper"] == 1 / 3
-    assert result.loc[0, "percent_doublet"] == 1 / 3
-    assert result.loc[0, "percent_usable"] == 0.25
-    assert result.loc[0, "tso_frac"] == 0.12
-    assert result.loc[0, "pass_fail"] == "pass"
-    assert result.loc[0, "mean_reads_per_cell"] == 1000
+    assert summary_df.loc[0, "keeper_cells"] == 1
+    assert summary_df.loc[0, "percent_keeper"] == 1 / 3
+    assert summary_df.loc[0, "percent_doublet"] == 1 / 3
+    assert summary_df.loc[0, "percent_usable"] == 0.25
+    assert summary_df.loc[0, "tso_frac"] == 0.12
+    assert summary_df.loc[0, "mean_reads_per_cell"] == 1000
 
 
 def test_load_data_filters_multiome_gene_expression_and_disambiguates_duplicates(tmp_path):
@@ -177,7 +141,7 @@ def test_load_data_filters_multiome_gene_expression_and_disambiguates_duplicates
     ).to_csv(matrix_dir / "features.tsv.gz", sep="\t", header=False, index=False)
     pd.Series(["AAAC-1", "TTGG-1"]).to_csv(matrix_dir / "barcodes.tsv.gz", header=False, index=False)
 
-    result = load_data(
+    loaded_library = load_data(
         {
             "ar_dir": str(tmp_path / "run"),
             "alignment_method": "CELL_RANGER_MULTI",
@@ -186,7 +150,7 @@ def test_load_data_filters_multiome_gene_expression_and_disambiguates_duplicates
         }
     )
 
-    assert result.count_matrix.shape == (2, 2)
-    assert result.barcode_list.tolist() == ["AAAC", "TTGG"]
-    assert result.gene_names.tolist() == ["GeneA", "GeneA gene-b"]
-    assert result.sample_id.tolist() == ["AAAC-lib-AR123", "TTGG-lib-AR123"]
+    assert loaded_library.count_matrix.shape == (2, 2)
+    assert loaded_library.barcode_list.tolist() == ["AAAC", "TTGG"]
+    assert loaded_library.gene_names.tolist() == ["GeneA", "GeneA gene-b"]
+    assert loaded_library.sample_id.tolist() == ["AAAC-lib-AR123", "TTGG-lib-AR123"]

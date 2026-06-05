@@ -60,10 +60,10 @@ def test_compute_qc_metrics_uses_nucleosome_free_denominator():
         }
     )
 
-    result = engine.compute_qc_metrics(nucleosome_df, insertion_counts_df)
+    qc_metrics_df = engine.compute_qc_metrics(nucleosome_df, insertion_counts_df)
 
-    assert result.loc[0, "atac_nucleosome_ratio"] == 2
-    assert result.loc[0, "atac_n_nucleosome_free_frags"] == 2
+    assert qc_metrics_df.loc[0, "atac_nucleosome_ratio"] == 2
+    assert qc_metrics_df.loc[0, "atac_n_nucleosome_free_frags"] == 2
 
 
 def test_compute_qc_metrics_raises_when_no_cells_pass_filters():
@@ -113,9 +113,9 @@ def test_create_tss_regions_deduplicates_and_builds_expected_windows():
         }
     )
 
-    result = engine.create_tss_regions(transcript_df)
+    tss_regions_df = engine.create_tss_regions(transcript_df)
 
-    assert result.to_dict("records") == [
+    assert tss_regions_df.to_dict("records") == [
         {"chrom": "chr1", "start": 3000, "end": 3099, "type": "flank"},
         {"chrom": "chr1", "start": 4950, "end": 5050, "type": "window"},
         {"chrom": "chr1", "start": 6901, "end": 7000, "type": "flank"},
@@ -133,9 +133,9 @@ def test_create_promoter_regions_is_strand_aware():
         }
     )
 
-    result = engine.create_promoter_regions(genes_df, region_span=(2000, 100))
+    promoter_regions_df = engine.create_promoter_regions(genes_df, region_span=(2000, 100))
 
-    assert result.to_dict("records") == [
+    assert promoter_regions_df.to_dict("records") == [
         {"chrom": "chr1", "start": 3000, "end": 5100, "type": "promoter"},
         {"chrom": "chr1", "start": 8900, "end": 11000, "type": "promoter"},
     ]

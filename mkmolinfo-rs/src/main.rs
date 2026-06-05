@@ -1,4 +1,4 @@
-//! mkmolinfo — Rust implementation of the `mkmolinfo` utility.
+//! Create molecule_info_new.h5 files for GEX QC workflows.
 //!
 //! The CLI, input/output filenames, HDF5 dataset names, 2-bit barcode/UMI
 //! encoder, per-molecule metric layout, and per-read classification branches are
@@ -163,8 +163,9 @@ type MolKey = (u64, u64);
 // HDF5 helpers
 // ---------------------------------------------------------------------------
 
-/// Generic dataset writer — implementation of `mkmolinfo::write_array`
-/// (`DatasetBuilder::create` followed by `Container::write`). This helper has a
+/// Generic dataset writer.
+///
+/// `DatasetBuilder::create` followed by `Container::write`. This helper has a
 /// single monomorphization (u32), used for all six count datasets.
 fn write_array<T>(file: &hdf5::File, name: &str, data: &Array1<T>) -> Result<()>
 where
@@ -338,7 +339,7 @@ fn locate(dir: &Path, name: &str) -> Option<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// main — implementation of `mkmolinfo::main`
+// CLI entry point.
 // ---------------------------------------------------------------------------
 
 fn main() -> Result<()> {

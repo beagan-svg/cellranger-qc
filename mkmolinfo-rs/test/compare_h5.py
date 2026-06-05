@@ -54,7 +54,7 @@ def compare(mine_path: Path, expected_path: Path) -> bool:
             )
 
     print("-" * 100)
-    print("ALL DATASETS IDENTICAL (implementation == expected):", ok)
+    print("ALL DATASETS IDENTICAL (generated == expected):", ok)
     return ok
 
 

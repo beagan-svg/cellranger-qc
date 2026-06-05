@@ -1,7 +1,6 @@
-# mkmolinfo-rs
+# molecule_info_new.h5 helper
 
-`mkmolinfo-rs` is a Rust implementation of the 10x Genomics
-`mkmolinfo` utility. It reads a Cell Ranger output directory containing
+This Rust helper reads a Cell Ranger output directory containing
 `molecule_info.h5` and `possorted_genome_bam.bam`, then writes
 `molecule_info_new.h5` for GEX QC workflows that need that file.
 

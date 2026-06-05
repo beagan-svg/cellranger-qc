@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Validation test: run the Rust implementation on synthetic data, then compare
+# Validation test: run the helper on synthetic data, then compare
 # all 7 output datasets against expected values. See README.md.
 set -euo pipefail
 
@@ -14,7 +14,7 @@ export PKG_CONFIG_PATH="$htslib_dir/lib/pkgconfig:$hdf5_dir/lib/pkgconfig:${PKG_
 export RUSTFLAGS="-C link-args=-Wl,-rpath,$hdf5_dir/lib"
 export DYLD_FALLBACK_LIBRARY_PATH="$hdf5_dir/lib:$htslib_dir/lib"
 
-echo "==> Building implementation (host)"
+echo "==> Building helper (host)"
 cargo build --quiet --manifest-path "$rs_dir/Cargo.toml"
 
 echo "==> Generating synthetic data"

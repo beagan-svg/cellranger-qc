@@ -1,8 +1,8 @@
-# mkmolinfo validation test
+# molecule_info_new.h5 helper validation test
 
-Verifies the Rust implementation against a small synthetic dataset. Docker is
-used to run the comparison in a consistent Linux environment; the implementation
-runs natively on the host.
+Verifies the helper against a small synthetic dataset. Docker is used to run
+the comparison in a consistent Linux environment; the helper runs natively on
+the host.
 
 ## Run
 
@@ -11,12 +11,12 @@ runs natively on the host.
 ```
 
 Prints a table comparing all 7 datasets and ends with
-`ALL DATASETS IDENTICAL (implementation == expected): True`.
+`ALL DATASETS IDENTICAL (generated == expected): True`.
 
 ## Requirements
 
 - Docker (with amd64 emulation)
-- HDF5 1.10 or 1.14 and `htslib` (to build/run the implementation). The
+- HDF5 1.10 or 1.14 and `htslib` (to build/run the helper). The
   current Rust HDF5 binding does not accept Homebrew HDF5 2.x.
 
 ## Files

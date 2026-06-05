@@ -10,14 +10,14 @@ This repository provides:
 
 - `cellranger-gex-qc`: GEX/multiome post-alignment QC, doublet scores, intron/exon matrices, count matrices, and library summaries.
 - `cellranger-atac-qc`: portable ATAC QC from fragments, per-barcode metrics, and a GTF annotation.
-- `mkmolinfo-rs`: optional Rust helper for generating `molecule_info_new.h5` files used by GEX QC workflows.
+- Optional Rust helper for generating `molecule_info_new.h5` files used by GEX QC workflows.
 
 ## Requirements
 
 - Python 3.10, 3.11, or 3.12
 - [`uv`](https://docs.astral.sh/uv/) for Python environment management
 - Cell Ranger output files for the workflow you are running
-- Rust stable only if you build `mkmolinfo-rs`
+- Rust stable only if you build the optional `molecule_info_new.h5` helper
 
 Python 3.13+ is not enabled yet because some scientific Python and bioinformatics dependencies can lag new Python releases.
 
@@ -126,15 +126,15 @@ The ATAC workflow writes `atac_qc.csv` with passing cells and `atac_`-prefixed m
 - `atac_reads_in_promoter`
 - `atac_promoter_ratio`
 
-## Optional molecule_info Helper
+## Optional molecule_info_new.h5 Helper
 
-`mkmolinfo-rs` generates `molecule_info_new.h5` from a Cell Ranger output directory. Build it only if your GEX workflow needs that compatibility file.
+The Rust helper generates `molecule_info_new.h5` from a Cell Ranger output directory. Build it only if your GEX workflow needs that compatibility file.
 
 ```bash
 cargo build --manifest-path mkmolinfo-rs/Cargo.toml --release
 ```
 
-See [docs/mkmolinfo.md](docs/mkmolinfo.md) for usage, HDF5 version notes, and validation-test details.
+See the [helper documentation](docs/mkmolinfo.md) for usage, HDF5 version notes, and validation-test details.
 
 ## Operational Notes
 
@@ -160,13 +160,13 @@ Or use Makefile shortcuts:
 make check
 ```
 
-Run Rust checks if `mkmolinfo-rs` changed:
+Run Rust checks if the optional `molecule_info_new.h5` helper changed:
 
 ```bash
 make rust-check
 ```
 
-GitHub Actions runs Python linting/tests on Python 3.10, 3.11, and 3.12, plus Rust formatting/tests for `mkmolinfo-rs`.
+GitHub Actions runs Python linting/tests on Python 3.10, 3.11, and 3.12, plus Rust formatting/tests for the optional helper.
 
 ## Versioning
 
