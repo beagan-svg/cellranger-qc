@@ -3,7 +3,7 @@
 ## Local setup
 
 ```bash
-uv sync --extra dev
+uv sync --frozen
 ```
 
 ## Checks

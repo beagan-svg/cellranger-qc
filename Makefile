@@ -1,7 +1,7 @@
 .PHONY: sync lint test check rust-fmt rust-test rust-check
 
 sync:
-	uv sync --extra dev
+	uv sync --frozen
 
 lint:
 	uv run ruff check .
