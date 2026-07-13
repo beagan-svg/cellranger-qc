@@ -10,5 +10,5 @@ This project uses semantic versioning: `MAJOR.MINOR.PATCH`.
 - Add project metadata, dependency declarations, README, CI, and focused tests.
 - Support both `bc` and `barcodes` sample metadata column names in ATAC metadata merge.
 - Add `uv`-based development workflow and reproducible lockfile.
-- Add production repository metadata, security policy, Makefile, and Rust helper docs.
+- Add repository metadata and Rust helper documentation.
 - Correct ATAC nucleosome binning to distinguish nucleosome-free fragments from mono-nucleosome fragments.

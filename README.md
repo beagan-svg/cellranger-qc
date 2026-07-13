@@ -112,24 +112,16 @@ nucleosome measurements.
 
 ## Development
 
-Install the development environment and run the Python checks:
+Development commands are defined in the `justfile`. Install the environment and
+run the Python checks with:
 
 ```bash
-uv sync --frozen
-uv run ruff check .
-uv run pytest
+just sync
+just check
 ```
 
-When changing the Rust helper, also run:
+When changing the Rust helper, run:
 
 ```bash
-cargo fmt --check --manifest-path mkmolinfo-rs/Cargo.toml
-cargo test --manifest-path mkmolinfo-rs/Cargo.toml
-```
-
-The same commands are available through the `Makefile`:
-
-```bash
-make check
-make rust-check
+just rust-check
 ```
