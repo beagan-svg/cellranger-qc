@@ -1,42 +1,7 @@
-"""
-Computes TSS enrichment, promoter ratio, and nucleosome metrics.
+"""Calculate ATAC QC metrics from Cell Ranger fragments and annotations.
 
-IMPORTANT: PLEASE READ FIRST
-
-In this script, an insertion is one endpoint of an ATAC fragment. Biologically,
-these endpoints represent Tn5 cut/insertion sites, where the ATAC-seq enzyme cut
-accessible DNA and inserted sequencing adapters. Counting insertion points helps
-measure how often accessible chromatin occurs near TSS, flank, and promoter
-regions.
-
-Coordinate formats:
-ATAC fragments: BED-like, 0-based start, exclusive end.
-GTF regions: 1-based start, inclusive end.
-NCLS: half-open intervals [start, end).
-
-Version 2.0 Update:
-For each chromosome, sort its annotation regions, combine overlapping spans for
-fewer fragment-file fetches, fetch fragments once per combined span, collect
-valid insertion positions, use NCLS to map those insertions back to the exact
-original regions, and update the numpy count matrix.
-
-Insertion counting summary:
-_count_insertions_for_chromosome_batch coordinates the region-level counting.
-For each chromosome, it takes the annotation regions for that chromosome,
-combines overlapping or nearby spans so the fragment file is fetched fewer
-times, asks _collect_insertions_from_region_span to collect insertion points,
-uses region_overlap_lookup to map those insertions back to exact annotation
-region types, and adds counts to the barcode-by-region-type matrix.
-
-_collect_insertions_from_region_span collects candidate insertions from the
-ATAC fragment file. It fetches fragments overlapping a broader chromosome span,
-skips fragments whose barcode is not a valid cell, skips fragments outside the
-configured size range, converts each fragment into insertion points
-``start + 1`` and ``end``, and keeps only insertion points that fall inside the
-span being fetched.
-
-region_overlap_lookup.all_overlaps_both searches for the annotation region that
-each insertion point overlaps.
+Fragment coordinates are BED-like. GTF coordinates are one-based and inclusive.
+Each fragment contributes its two Tn5 insertion endpoints to overlapping regions.
 """
 
 import argparse
@@ -55,7 +20,6 @@ from cellranger_qc import __version__
 
 MAX_INSERTION_WORKERS = 8
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
@@ -85,46 +49,7 @@ class QCMetricsEngine:
         nuc_max_frags: int = 2000,
         nuc_len: int = 147,
     ):
-        """
-        Initialize ATAC QC Metrics
-
-        Parameters
-        ----------
-        annotation_file : str
-            Path to the annotation GTF file
-        atac_fragments_path : str
-            Path to the ATAC fragments TSV file (tab-separated, may be gzipped)
-        per_barcode_metrics_path : str
-            Path to the per-barcode metrics CSV file
-        window : int, optional
-            Width of TSS window in base pairs (centered on TSS). Default is 101.
-        flank : int, optional
-            Distance from TSS to flanking regions in base pairs. Default is 2000.
-        norm : int, optional
-            Size of normalization region in base pairs for TSS enrichment calculation.
-            Default is 100.
-        min_norm : float, optional
-            Minimum normalization value for flanking region count in TSS enrichment
-            calculation. Prevents division by very small numbers. Default is 0.2.
-        skip_chr_m : bool, optional
-            Whether to skip mitochondrial chromosome (chrM) during processing.
-            Default is True.
-        min_tss : float, optional
-            Minimum TSS enrichment score threshold for filtering cells. Default is 1.0.
-        min_frags_per_cell : int, optional
-            Minimum number of fragments per cell for filtering. Default is 1000.
-        max_frags_per_cell : int, optional
-            Maximum number of fragments per cell for filtering. Default is 100000000.
-        nuc_min_frags : int, optional
-            Minimum fragment size in base pairs for nucleosome classification.
-            Default is 10.
-        nuc_max_frags : int, optional
-            Maximum fragment size in base pairs for nucleosome classification.
-            Default is 2000.
-        nuc_len : int, optional
-            Expected nucleosome length in base pairs used for fragment classification.
-            Default is 147.
-        """
+        """Load cell barcodes and configure the ATAC QC thresholds."""
         self.annotation_file = annotation_file
         self.atac_fragments_path = atac_fragments_path
         per_barcode_metrics_df = pd.read_csv(
@@ -132,7 +57,6 @@ class QCMetricsEngine:
             usecols=["barcode", "is_cell"],
         )
 
-        # Filtered barcodes (is_cell=1)
         self.is_cell_bc = set(
             per_barcode_metrics_df[per_barcode_metrics_df["is_cell"] == 1]["barcode"]
         )
@@ -177,43 +101,7 @@ class QCMetricsEngine:
         )
 
     def nucleosome_classification(self) -> pd.DataFrame:
-        """
-        Classify nucleosomes by fragment size for each barcode.
-
-        Pseudocode
-        ----------
-        1. Read the fragment file and keep chromosome, start, end, and barcode.
-        2. Keep fragments from valid cell barcodes and valid annotation chromosomes.
-        3. Calculate each fragment size as ``end - start``.
-        4. Keep fragments within the configured size range.
-        5. Convert each fragment size into a nucleosome class.
-        6. Count total, nucleosome-free, mono-, di-, and multi-nucleosome fragments per barcode.
-
-        Data example
-        ------------
-        With ``nuc_len = 147``:
-            barcode  start  end  size  class
-            AAAC     100    220  120   nucleosome_free
-            AAAC     300    470  170   mono
-            AAAC     500    800  300   di
-            TTGG     100    620  520   multi
-
-        The returned counts are:
-            barcode  n_frags  n_nucleosome_free_frags  n_mono_frags  n_di_frags  n_multi_frags
-            AAAC     3        1                        1             1           0
-            TTGG     1        0                        0             0           1
-
-        Returns
-        -------
-        nucleosome_df : pd.DataFrame
-            DataFrame with nucleosome counts per barcode. Columns:
-                - 'barcode': Cell barcode (str)
-                - 'n_frags': Total fragment count (int)
-                - 'n_nucleosome_free_frags': Nucleosome-free fragments (<1x nuc_len) (int)
-                - 'n_mono_frags': Mono-nucleosome fragments (>=1x and <2x nuc_len) (int)
-                - 'n_di_frags': Di-nucleosome fragments (>=2x and <3x nuc_len) (int)
-                - 'n_multi_frags': Multi-nucleosome fragments (>=3x nuc_len) (int)
-        """
+        """Count nucleosome-free, mono-, di-, and multi-nucleosome fragments per cell."""
         logger.info("Fragments file path: %s", self.atac_fragments_path)
 
         file_size_bytes = Path(self.atac_fragments_path).stat().st_size
@@ -240,8 +128,6 @@ class QCMetricsEngine:
                 separator="\t",
                 comment_prefix="#",
             )
-            # Select only the first 4 columns and assign canonical names/types.
-            # Extra columns (if any) are ignored; missing values become nulls and are filtered out.
             .select(
                 [
                     pl.col("column_1").cast(pl.Utf8).alias("chrom"),
@@ -308,64 +194,7 @@ class QCMetricsEngine:
         return nucleosome_df
 
     def count_fragments_and_insertions(self) -> pd.DataFrame:
-        """
-        Count fragment insertions in TSS window, flank, and promoter regions.
-
-        Fragment insertions are counted when fragment start or end positions fall
-        within the specified regions. Chromosomes are split across workers so
-        each worker gets roughly the same number of annotation regions to process.
-
-        Here, an insertion is one endpoint of an ATAC fragment. Biologically,
-        these endpoints represent Tn5 cut/insertion sites in accessible DNA.
-
-        Input flow
-        ----------
-        GTF annotation file:
-            -> create TSS window regions
-            -> create flank regions
-            -> create promoter regions
-
-        ATAC fragments file:
-            -> read fragments overlapping those regions
-            -> convert each fragment into insertion points
-            -> count which insertion points land inside each region type
-
-        Pseudocode
-        ----------
-        1. Open the fragment index and keep only annotation chromosomes that exist.
-        2. Split chromosomes across workers so each worker receives a similar
-           number of annotation regions.
-        3. Count insertion overlaps for each chromosome batch in parallel.
-        4. Sum the worker count matrices into one barcode-by-region matrix.
-        5. Return one row per barcode with nonzero window, flank, or promoter counts.
-
-        Data example
-        ------------
-        Annotation regions:
-            chr1  100  200  window
-            chr1  500  600  promoter
-
-        Fragments:
-            chr1  120  180  AAAC
-            chr1  550  700  TTGG
-
-        The first fragment contributes insertions 121 and 180 to ``window``.
-        The second contributes insertion 551 to ``promoter``; 700 is outside
-        the promoter. The output counts are:
-            barcode  window  flank  promoter
-            AAAC     2       0      0
-            TTGG     0       0      1
-
-        Returns
-        -------
-        insertion_counts_df : pd.DataFrame
-            DataFrame with insertion counts per barcode and region type.
-            Columns:
-                - 'barcode': Cell barcode (str)
-                - 'window': Insertions in TSS window (centered on TSS) (int)
-                - 'flank': Insertions in TSS flanking regions (int)
-                - 'promoter': Insertions in promoter regions (int)
-        """
+        """Count per-cell insertions in TSS windows, flanks, and promoters."""
         start_time = time.time()
         insertion_counts = np.zeros((len(self.barcodes), 3), dtype=np.int64)
 
@@ -416,64 +245,7 @@ class QCMetricsEngine:
         return insertion_counts_df
 
     def _count_insertions_for_chromosome_batch(self, chromosome_batch) -> np.ndarray:
-        """
-        Count region-overlapping insertion points for one batch of chromosomes.
-
-        Pseudocode
-        ----------
-        1. Take the regions assigned to this worker, grouped by chromosome.
-        2. For each chromosome, read only the fragment-file ranges that cover
-           those regions.
-        3. For each valid cell fragment, keep its start and end insertion positions.
-        4. Check whether each insertion position lands in a TSS window, flank,
-           or promoter region.
-        5. Add one count for the matching barcode and region type.
-
-        Data example
-        ------------
-        ``chromosome_batch`` is a list of chromosome-specific region tables:
-            [
-                (
-                    "chr1",
-                    chrom  start  end  type
-                    chr1   100    200  window
-                    chr1   180    260  promoter
-                    chr1   500    600  flank
-                ),
-                (
-                    "chr2",
-                    chrom  start  end   type
-                    chr2   1000   1100  window
-                    chr2   1500   1600  promoter
-                )
-            ]
-
-        Assume the output rows and columns mean:
-            row 0 -> barcode AAAC
-            row 1 -> barcode TTGG
-            column 0 -> window
-            column 1 -> flank
-            column 2 -> promoter
-
-        If AAAC has two insertions in a TSS window and TTGG has one insertion
-        in a promoter, the returned numpy matrix is:
-
-            [[2, 0, 0],
-             [0, 0, 1]]
-
-        Parameters
-        ----------
-        chromosome_batch : list
-            List of ``(chromosome, chromosome_regions)`` pairs. Each
-            ``chromosome_regions`` DataFrame contains ``start``, ``end``, and
-            ``type`` columns for TSS windows, flanks, or promoters.
-
-        Returns
-        -------
-        np.ndarray
-            Barcode-by-region count matrix with columns ordered as window,
-            flank, and promoter.
-        """
+        """Count region-overlapping insertions for one worker's chromosome batch."""
         region_type_to_column = {"window": 0, "flank": 1, "promoter": 2}
         chromosome_batch_insertion_counts = np.zeros((len(self.barcodes), 3), dtype=np.int64)
 
@@ -489,9 +261,7 @@ class QCMetricsEngine:
                     dtype=np.int8,
                 )
                 region_overlap_lookup = NCLS(region_starts, region_ends, region_rows)
-                # ATAC fragment start/end insertion positions collected from the fragments file.
                 insertion_positions_list = list()
-                # Row indexes into self.barcodes, which comes from per_barcode_metrics.csv.
                 barcode_indices_list = list()
 
                 merged_start = region_starts[0]
@@ -522,21 +292,6 @@ class QCMetricsEngine:
                 if insertion_positions_list:
                     insertion_positions = np.asarray(insertion_positions_list, dtype=np.int64)
                     barcode_indices = np.asarray(barcode_indices_list, dtype=np.int32)
-                    # Example overlap lookup:
-                    #   region 0 = chr1 100-200 window
-                    #   region 1 = chr1 180-260 promoter
-                    #   insertion_positions = [121, 190, 251]
-                    # NCLS treats each insertion as a one-base interval:
-                    #   insertion index 0 -> [121, 122)
-                    #   insertion index 1 -> [190, 191)
-                    #   insertion index 2 -> [251, 252)
-                    # Overlaps:
-                    #   121 is in region 0
-                    #   190 is in region 0 and region 1
-                    #   251 is in region 1
-                    # Returned indices:
-                    #   overlapping_insertion_indices = [0, 1, 1, 2]
-                    #   overlapping_region_indices = [0, 0, 1, 1]
                     (
                         overlapping_insertion_indices,
                         overlapping_region_indices,
@@ -565,44 +320,8 @@ class QCMetricsEngine:
         insertion_positions_list,
         barcode_indices_list,
     ) -> None:
-        """
-        Collect valid insertion positions inside one region span.
-
-        Pseudocode
-        ----------
-        1. Fetch fragments from the tabix file over the region span.
-        2. Skip fragments whose barcode is not a cell barcode.
-        3. Skip fragments outside the configured fragment-size range.
-        4. Convert the fragment start to an insertion position by adding 1.
-        5. Append start/end insertions that fall inside the region span.
-
-        Data example
-        ------------
-        For region span ``chr1:100-200`` and fragment ``chr1 120 180 AAAC``:
-            fragment start insertion = 121
-            fragment end insertion = 180
-
-        Both positions are appended to ``insertion_positions_list`` and the row
-        for barcode ``AAAC`` is appended twice to ``barcode_indices_list``.
-
-        Parameters
-        ----------
-        tbx_file : pysam.TabixFile
-            Open tabix handle for the ATAC fragments file.
-        chromosome : str
-            Chromosome to query.
-        region_span_start : int
-            Start of the region span.
-        region_span_end : int
-            End of the region span.
-        insertion_positions_list : list
-            Output list populated with insertion positions.
-        barcode_indices_list : list
-            Output list populated with barcode indices matching ``insertion_positions_list``.
-        """
-        # tbx fetch expects a 0-based start, but region spans are built from GTF, which are 1-based.
-        # When we query tabix by region span, tabix returns fragments that overlap the region span,
-        # not fragments whose insertion points are both inside the span.
+        """Collect valid fragment endpoints inside one annotation span."""
+        # Tabix expects a zero-based query start, while GTF-derived spans are one-based.
         for fragment in tbx_file.fetch(chromosome, max(0, region_span_start - 1), region_span_end):
             fragment_fields = fragment.split("\t", 4)
             barcode_index = self.barcode_to_row.get(fragment_fields[3])
@@ -628,44 +347,11 @@ class QCMetricsEngine:
         nucleosome_df: pd.DataFrame,
         insertion_counts_df: pd.DataFrame,
     ) -> pd.DataFrame:
-        """
-        Calculates TSS enrichment score, promoter ratio, and nucleosome ratio for each
-        barcode, then applies filtering criteria based on TSS enrichment and fragment counts.
-
-        Parameters
-        ----------
-        nucleosome_df : pd.DataFrame
-            DataFrame from nucleosome_classification() with nucleosome counts per barcode
-        insertion_counts_df : pd.DataFrame
-            DataFrame from count_fragments_and_insertions() with insertion counts per barcode
-
-        Returns
-        -------
-        pd.DataFrame
-            DataFrame with passing QC metrics, containing columns:
-                - 'barcode': Prefixed barcode (str)
-                - 'tss_enrichment': TSS enrichment score (float)
-                - 'reads_in_tss': Insertions in TSS window (int)
-                - 'n_frags': Total fragments (int)
-                - 'n_nucleosome_free_frags': Nucleosome-free fragments (int)
-                - 'n_mono_frags': Mono-nucleosome fragments (int)
-                - 'n_di_frags': Di-nucleosome fragments (int)
-                - 'n_multi_frags': Multi-nucleosome fragments (int)
-                - 'nucleosome_ratio': (mono + di + multi) / nucleosome-free ratio (float)
-                - 'reads_in_promoter': Promoter insertions (int)
-                - 'promoter_ratio': Promoter insertions / (n_frags * 2) (float)
-
-            Results include only cells meeting:
-                - tss_enrichment >= min_tss
-                - n_frags >= min_frags_per_cell
-                - n_frags <= max_frags_per_cell
-        """
+        """Calculate ATAC metrics and return cells that pass the configured filters."""
         start_time = time.time()
 
-        # Merge insertion counts with nucleosome signal calculations
         qc_metrics_df = insertion_counts_df.merge(nucleosome_df, on="barcode", how="left")
 
-        # Fill missing nucleosome signal counts with zeros (for barcodes without fragments)
         nucleosome_cols = [
             "n_frags",
             "n_nucleosome_free_frags",
@@ -675,7 +361,6 @@ class QCMetricsEngine:
         ]
         qc_metrics_df[nucleosome_cols] = qc_metrics_df[nucleosome_cols].fillna(0).astype(int)
 
-        # TSS enrichment calculation
         tss_window_density = qc_metrics_df["window"] / self.window
         flank_density = qc_metrics_df["flank"] / self.norm
         flank_density_normalized = np.maximum(flank_density, self.min_norm)
@@ -683,14 +368,12 @@ class QCMetricsEngine:
             (2 * tss_window_density) / flank_density_normalized
         ).round(3)
 
-        # Promoter ratio calculation
         qc_metrics_df["promoter_ratio"] = np.where(
             qc_metrics_df["n_frags"] > 0,
             qc_metrics_df["promoter"] / (qc_metrics_df["n_frags"] * 2),
             np.nan,
         )
 
-        # Nucleosome ratio calculation
         qc_metrics_df["nucleosome_ratio"] = np.where(
             qc_metrics_df["n_nucleosome_free_frags"] > 0,
             (
@@ -702,11 +385,9 @@ class QCMetricsEngine:
             np.nan,
         )
 
-        # Create final column names before dropping temporary columns
         qc_metrics_df["reads_in_tss"] = qc_metrics_df["window"]
         qc_metrics_df["reads_in_promoter"] = qc_metrics_df["promoter"]
 
-        # Drop temporary columns used for calculations
         qc_metrics_df = qc_metrics_df.drop(columns=["window", "flank", "promoter"])
 
         passing_qc_metrics_df = qc_metrics_df[
@@ -714,7 +395,6 @@ class QCMetricsEngine:
             & (qc_metrics_df.n_frags.between(self.min_frags_per_cell, self.max_frags_per_cell))
         ]
 
-        # Log Summary Statistics
         total_cells = len(qc_metrics_df)
         high_quality_cells = len(passing_qc_metrics_df)
 
@@ -751,7 +431,6 @@ class QCMetricsEngine:
             elapsed_time / 60,
         )
 
-        # Add "atac_" prefix to all columns except "barcode"
         passing_qc_metrics_df.columns = [
             "atac_" + col if col != "barcode" else col for col in passing_qc_metrics_df.columns
         ]
@@ -762,40 +441,7 @@ class QCMetricsEngine:
         self,
         transcript_df: pd.DataFrame,
     ) -> pd.DataFrame:
-        """
-        Generate TSS window and flanking regions from transcript annotations.
-
-        Creates three region types per TSS:
-        1. Window: Centered on TSS with width = self.window (default 101bp)
-        2. Upstream flank: 100bp region at TSS - flank to TSS - flank + norm
-        3. Downstream flank: 100bp region at TSS + flank - norm to TSS + flank
-
-        Data example
-        ------------
-        For transcript ``chr1 start=5000 end=9000`` with defaults
-        ``window=101``, ``flank=2000``, and ``norm=100``:
-            TSS position = 5000
-            TSS window = chr1 4950 5050 window
-            upstream flank = chr1 3000 3099 flank
-            downstream flank = chr1 6901 7000 flank
-
-        Parameters
-        ----------
-        transcript_df : pd.DataFrame
-            DataFrame with columns:
-                - 'chrom': Chromosome name (str)
-                - 'start': TSS position (int, 1-based)
-                - 'end': Gene end position (int, 1-based)
-        Returns
-        -------
-        pd.DataFrame
-            DataFrame with columns:
-                - 'chrom': Chromosome name (str)
-                - 'start': Region start position (int, 1-based)
-                - 'end': Region end position (int, 1-based)
-                - 'type': Region type ('window' or 'flank') (str)
-            Sorted by chrom, then start. Duplicates removed.
-        """
+        """Create a centered TSS window and two normalization flanks per transcript."""
         regions = list()
 
         for transcript in transcript_df.drop_duplicates(
@@ -803,16 +449,13 @@ class QCMetricsEngine:
         ).itertuples(index=False):
             tss_start_pos, chromosome = transcript.start, transcript.chrom
 
-            # Create TSS window (101bp centered on TSS)
             half_width = self.window // 2
             window_start = max(1, tss_start_pos - half_width)
             window_end = window_start + self.window - 1
 
-            # Create upstream flank (100bp at TSS - 2000 to TSS - 1901)
             upstream_flank_start = max(1, tss_start_pos - self.flank)
             upstream_flank_end = max(1, tss_start_pos - self.flank + self.norm - 1)
 
-            # Create downstream flank (100bp at TSS + 1901 to TSS + 2000)
             downstream_flank_start = tss_start_pos + self.flank - self.norm + 1
             downstream_flank_end = tss_start_pos + self.flank
 
@@ -846,48 +489,7 @@ class QCMetricsEngine:
         genes_df: pd.DataFrame,
         region_span: tuple[int, int] = (2000, 100),
     ) -> pd.DataFrame:
-        """
-        Create strand-aware promoter regions from annotations file.
-
-        For each gene, defines promoter region relative to TSS based on strand:
-        - Forward strand (+): upstream bp upstream, downstream bp downstream
-        - Reverse strand (-): upstream bp downstream, downstream bp upstream
-
-        Data example
-        ------------
-        With the default ``region_span=(2000, 100)``:
-
-        For ``chr1 start=5000 end=9000 strand=+``:
-            TSS position = 5000
-            promoter = chr1 3000 5100 promoter
-
-        For ``chr1 start=5000 end=9000 strand=-``:
-            TSS position = 9000
-            promoter = chr1 8900 11000 promoter
-
-        Parameters
-        ----------
-        genes_df : pd.DataFrame
-            DataFrame with columns:
-                - 'chrom': Chromosome name (str)
-                - 'start': Gene start position (int, 1-based)
-                - 'end': Gene end position (int, 1-based)
-                - 'strand': Strand orientation ('+' or '-') (str)
-                - Optional: 'gene_id', 'symbol' (not included in output)
-        region_span : Tuple[int, int], optional
-            (upstream, downstream) tuple defining promoter span in bp.
-            Default is (2000, 100) for 2000bp upstream and 100bp downstream.
-
-        Returns
-        -------
-        pd.DataFrame
-            DataFrame with columns:
-                - 'chrom': Chromosome name (str)
-                - 'start': Promoter start position (int, 1-based)
-                - 'end': Promoter end position (int, 1-based)
-                - 'type': Always 'promoter' (str)
-            Sorted by chrom, then start. Duplicates removed.
-        """
+        """Create strand-aware promoter regions for each gene."""
         upstream, downstream = region_span
         regions = list()
 
@@ -916,33 +518,16 @@ class QCMetricsEngine:
         self,
         annotation_df: pd.DataFrame,
     ) -> pd.DataFrame:
-        """
-        Exclude scaffold chromosomes and mitochondrial chromosome (if skip_chr_m is True).
-
-        - Scaffold chromosomes: NW_*, NT_*, NG_*, chrGL*, chrUn_*, chrJH*, chrEB*
-        - Mitochondrial chromosome (chrM)
-
-        Parameters
-        ----------
-        annotation_df : pd.DataFrame
-            DataFrame containing chromosome annotations.
-
-        Returns
-        -------
-        pd.DataFrame
-            DataFrame with scaffolds and optionally chrM excluded.
-        """
+        """Remove scaffold chromosomes and optionally the mitochondrial chromosome."""
         original_count = len(annotation_df)
         original_chromosomes = set(annotation_df["chrom"])
 
-        # Exclude scaffolds
         annotation_df = annotation_df[
             ~annotation_df["chrom"].str.startswith(
                 ("NW_", "NT_", "NG_", "chrGL", "chrUn_", "chrJH", "chrEB")
             )
         ]
 
-        # Exclude chrM if enabled
         if self.skip_chr_m:
             annotation_df = annotation_df[annotation_df["chrom"] != "chrM"]
 
@@ -964,28 +549,7 @@ class QCMetricsEngine:
         self,
         gtf_path: str,
     ) -> tuple[pd.DataFrame, pd.DataFrame]:
-        """
-        Process GTF file and organize into gene and transcript annotations.
-
-        Reads GTF file, filters for 'gene' and 'transcript' features, standardizes
-        chromosome naming, excludes scaffolds, and returns separate DataFrames.
-
-        Parameters
-        ----------
-        gtf_path : str
-            Path to GTF annotation file (may be gzipped). File should be tab-separated
-            with standard GTF columns: chrom, source, feature, start, end, score,
-            strand, frame, attribute.
-
-        Returns
-        -------
-        gene_df : pd.DataFrame
-            DataFrame with columns ['chrom', 'start', 'end', 'strand'] for gene features.
-            Scaffolds excluded, chromosomes standardized.
-        transcript_df : pd.DataFrame
-            DataFrame with columns ['chrom', 'start', 'end', 'strand'] for transcript features.
-            Scaffolds excluded, chromosomes standardized. Start position represents TSS.
-        """
+        """Read gene and transcript coordinates from a GTF file."""
         logger.info("Processing Annotation GTF file: %s", gtf_path)
 
         gtf_column_names = [
@@ -1003,7 +567,6 @@ class QCMetricsEngine:
             gtf_path, sep="\t", comment="#", header=None, names=gtf_column_names
         )
 
-        # Standardize chromosome naming
         gtf_annotation_df["chrom"] = gtf_annotation_df["chrom"].apply(
             lambda chromosome: (
                 f"chr{chromosome}"
@@ -1013,7 +576,6 @@ class QCMetricsEngine:
             )
         )
 
-        # Split gtf by features into gene and transcript dataframes
         genes_df = gtf_annotation_df[gtf_annotation_df["feature"] == "gene"][
             ["chrom", "start", "end", "strand"]
         ].copy()
@@ -1035,17 +597,7 @@ class QCMetricsEngine:
         return genes_df, transcript_df
 
     def setup_annotation_regions(self) -> None:
-        """
-        Load annotation file and create TSS/promoter regions.
-
-        Processes GTF annotation file, extracts gene and transcript features, creates
-        TSS window/flank regions and promoter regions.
-
-        Method Effects
-        ------------
-        Sets self.annotation_regions and self.valid_chromosomes.
-        """
-
+        """Load the GTF file and cache its TSS, flank, and promoter regions."""
         genes_df, transcript_df = self._split_gtf_file(self.annotation_file)
 
         logger.info("  Creating TSS regions (window=%sbp, flank=%sbp)", self.window, self.flank)
@@ -1070,20 +622,7 @@ def run_atac_qc(
     atac_fragments_path: str,
     per_barcode_metrics_path: str,
 ) -> None:
-    """
-    Run ATAC QC from portable Cell Ranger ATAC outputs and save a CSV.
-
-    Parameters
-    ----------
-    output_path : str
-        Path to the output directory for saving results
-    annotation_file : str
-        Path to the annotation GTF file
-    atac_fragments_path : str
-        Path to the ATAC fragments TSV (possibly gzipped)
-    per_barcode_metrics_path : str
-        Path to the per-barcode metrics CSV
-    """
+    """Run the ATAC QC workflow and write `atac_qc.csv`."""
     validate_tabix_index(atac_fragments_path)
 
     qc_metrics_engine = QCMetricsEngine(
@@ -1092,28 +631,20 @@ def run_atac_qc(
         per_barcode_metrics_path=per_barcode_metrics_path,
     )
 
-    logger.info("=" * 60)
     logger.info("Step 1: Setting up annotation regions")
-    logger.info("=" * 60)
 
     qc_metrics_engine.setup_annotation_regions()
 
-    logger.info("=" * 60)
     logger.info("Step 2: Classifying nucleosomes and counting fragments")
-    logger.info("=" * 60)
     nucleosome_df = qc_metrics_engine.nucleosome_classification()
 
-    logger.info("=" * 60)
     logger.info("Step 3: Computing TSS enrichment, promoter ratio, and nucleosome ratio metrics")
-    logger.info("=" * 60)
 
     qc_metrics_df = qc_metrics_engine.compute_qc_metrics(
         nucleosome_df=nucleosome_df,
         insertion_counts_df=qc_metrics_engine.count_fragments_and_insertions(),
     )
-    logger.info("=" * 60)
     logger.info("Step 4: Exporting ATAC QC metrics to CSV")
-    logger.info("=" * 60)
 
     save_to_csv(
         qc_metrics_df=qc_metrics_df,
@@ -1144,16 +675,7 @@ def save_to_csv(
     qc_metrics_df: pd.DataFrame,
     output_path: str,
 ) -> None:
-    """
-    Save ATAC QC metrics results to CSV file.
-
-    Parameters
-    ----------
-    qc_metrics_df : pd.DataFrame
-        DataFrame containing ATAC QC metrics results
-    output_path : str
-        Path to the output directory for saving results
-    """
+    """Write ATAC QC metrics to `atac_qc.csv` in the output directory."""
     output_directory = Path(output_path)
     output_directory.mkdir(parents=True, exist_ok=True)
     output_csv_path = output_directory / "atac_qc.csv"
